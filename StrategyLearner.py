@@ -7,6 +7,7 @@ import indicators as indi
 import marketsimcode as msim
 from LoanEnv import LoanEnv
 from Plotter import Plotter
+from StackedPlotter import StackedPlotter
 from stable_baselines.deepq.policies import MlpPolicy
 from stable_baselines.bench import Monitor
 from stable_baselines import DQN
@@ -58,7 +59,7 @@ class StrategyLearner:
     def cmp_policy(self, symbol='JPM', sd=dt.datetime(2009, 1, 1),
                    ed=dt.datetime(2010, 12, 31), sv=1e5, notional=1e3,
                    commission=0.0, impact=0.0, should_show=False,
-                   should_save=False, save_path=None):
+                   should_save=False, save_path=None, stack_plot=True):
         df_trades = self.test_policy(symbol=symbol, sd=sd, ed=ed, sv=sv,
                                      notional=notional)
         sp = msim.compute_portvals(df_trades, start_val=sv,
@@ -72,7 +73,7 @@ class StrategyLearner:
         df_cmp.benchmark /= bp.iloc[0]
         df_cmp.learner /= sp.iloc[0]
 
-        if should_show:
+        if should_show and not stack_plot:
             pltr = Plotter()
             title = f'{symbol} Strategy'
             yax_label = 'Indexed MV'
@@ -82,6 +83,15 @@ class StrategyLearner:
             pltr.plot(X, Y, labels=labels, yax_label=yax_label,
                       title=title, colors=colors, should_show=should_show,
                       should_save=should_save, save_path=save_path)
+        elif should_show and stack_plot:
+            pltr = StackedPlotter()
+            title = f'{symbol} Strategy'
+            yax_labels = ['Indexed MV', 'Shares']
+            colors = [[(1, 0, 0), (0, 1, 0)], [(0.35, 0.35, 0.35)]]
+            df_pos = df_trades.cumsum()
+            pltr.stacked_plot(df_cmp, df_pos, yax_labels=yax_labels,
+                              title=title, colors=colors,
+                              should_show=should_show, save_path=save_path)
 
         return df_cmp
 
@@ -158,10 +168,11 @@ class StrategyLearner:
 
 if __name__ == '__main__':
     lrnr = StrategyLearner()
-    tsteps = int(1e4)
-    sd = dt.datetime(2009, 1, 1)
-    ed = dt.datetime(2011, 12, 31)
-    lrnr.train(symbol='JPM', time_steps=tsteps, sd=sd, ed=ed,
-               savepath='deepq_loanenv')
-    lrnr.cmp_policy(symbol='JPM', sd=sd, ed=ed, sv=1e5, notional=1e3,
+    symbol = 'PRPL'
+    sd = dt.datetime(2015, 10, 29)
+    ed = dt.datetime(2019, 12, 12)
+    tsteps = int(1e5)
+    lrnr.train(symbol=symbol, time_steps=tsteps, sd=sd, ed=ed,
+               savepath=f'deepq_{symbol}')
+    lrnr.cmp_policy(symbol=symbol, sd=sd, ed=ed, sv=1e5, notional=1e3,
                     commission=0.0, impact=0.0, should_show=True)
