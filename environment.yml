@@ -1,0 +1,25 @@
+name: fleishco
+channels:
+        - conda-forge
+        - defaults
+dependencies:
+        - python=3.7
+        - matplotlib
+        - numpy
+        - pandas
+        - scipy
+        - flake8
+        - psycopg2
+        - jupyter
+        - jupyterlab
+        - pip
+        - scikit-learn
+        - imageio=2.5.0
+        - tqdm=4.36.1
+        - networkx
+        - pytables
+        - pip:
+                - pprofile
+                - jsons
+                - stable-baselines[mpi]
+                - tensorflow==1.14.0
