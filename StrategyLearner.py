@@ -56,6 +56,20 @@ class StrategyLearner:
                                          f'DQN {symbol}')
             plt.show()
 
+    def load_model(self, symbol='JPM', sd=dt.datetime(2009, 1, 1),
+                   ed=dt.datetime(2010, 12, 31), loadpath=None):
+        # load data and indicators
+        df = self._load_data([symbol], sd, ed)
+        df_met = self._get_indicators(symbol, df)
+        print(f'min: {df_met.min()} max: {df_met.max()}')
+
+        # set environment
+        self.env = Monitor(LoanEnv(df_met), self.log_dir,
+                           allow_early_resets=True)
+
+        # load model
+        self.model = DQN.load(loadpath, env=self.env)
+
     def cmp_policy(self, symbol='JPM', sd=dt.datetime(2009, 1, 1),
                    ed=dt.datetime(2010, 12, 31), sv=1e5, notional=1e3,
                    commission=0.0, impact=0.0, should_show=False,
@@ -169,10 +183,20 @@ class StrategyLearner:
 if __name__ == '__main__':
     lrnr = StrategyLearner()
     symbol = 'PRPL'
-    sd = dt.datetime(2015, 10, 29)
-    ed = dt.datetime(2019, 12, 12)
-    tsteps = int(1e5)
-    lrnr.train(symbol=symbol, time_steps=tsteps, sd=sd, ed=ed,
-               savepath=f'deepq_{symbol}')
+    sd = dt.datetime(2018, 1, 29)
+    ed = dt.datetime(2019, 12, 16)
+    # cd = dt.datetime(2019, 12, 17)
+
+    # train model
+    if False:
+        tsteps = int(1e5)
+        lrnr.train(symbol=symbol, time_steps=tsteps, sd=sd, ed=ed,
+                   savepath=f'models/deepq_{symbol}')
+
+    # load saved model
+    if True:
+        lrnr.load_model(symbol=symbol, sd=sd, ed=ed,
+                        loadpath=f'models/deepq_{symbol}')
+
     lrnr.cmp_policy(symbol=symbol, sd=sd, ed=ed, sv=1e5, notional=1e3,
-                    commission=0.0, impact=0.0, should_show=True)
+                    commission=1e3*0.01, impact=0.0, should_show=True)
