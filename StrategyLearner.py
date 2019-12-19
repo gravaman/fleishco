@@ -166,44 +166,51 @@ class StrategyLearner:
         return vals.rename(symbol)
 
     def predict(self, symbol, loadpath=None, sd=dt.datetime(2018, 1, 29),
-                ed=dt.datetime(2019, 12, 18)):
+                ed=dt.datetime(2019, 12, 18), fwd=False):
         # update data
         dp.pull(symbol, should_save=True)
         dp.pull('SPY', should_save=True)
 
         # load data and add phantom SPY trading day
         df = self._load_data([symbol], sd, ed)
-        lastspy = df.loc['SPY'].tail(1).copy()
-        lastspy.index = lastspy.index.shift(1, freq='D')
-        lastspy['Symbol'] = 'SPY'
-        lastspy = lastspy.reset_index().set_index(['Symbol', 'Date'])
-        df = df.append(lastspy).sort_index()
+        if fwd:
+            lastspy = df.loc['SPY'].tail(1).copy()
+            lastspy.index = lastspy.index.shift(1, freq='D')
+            lastspy['Symbol'] = 'SPY'
+            lastspy = lastspy.reset_index().set_index(['Symbol', 'Date'])
+            df = df.append(lastspy).sort_index()
 
         # load model and predict for test range
         self.model = DQN.load(loadpath)
-        chgs = np.linspace(-4, 4, num=33)
-        pxs = chgs + df.loc[symbol].tail(1).copy().AdjClose.values[0]
-        pxchgs = np.zeros((33,))
-        actions = np.zeros((33,))
-        for i, px in enumerate(pxs):
-            last = df.loc[symbol].tail(1).copy()
-            last.index = last.index.shift(1, freq='D')
-            pxchgs[i] = px/last.AdjClose-1
-            last.AdjClose = px
-            last.Close = px
-            last['Symbol'] = symbol
-            last = last.reset_index().set_index(['Symbol', 'Date'])
-            df_tmp = df.append(last).sort_index()
+        if fwd:
+            chgs = np.linspace(-0.2, 0.2, num=41)
+            pxs = chgs + df.loc[symbol].tail(1).copy().AdjClose.values[0]
+            pxchgs = np.zeros((41,))
+            actions = np.zeros((41,))
+            for i, px in enumerate(pxs):
+                last = df.loc[symbol].tail(1).copy()
+                last.index = last.index.shift(1, freq='D')
+                pxchgs[i] = px/last.AdjClose-1
+                last.AdjClose = px
+                last.Close = px
+                last['Symbol'] = symbol
+                last = last.reset_index().set_index(['Symbol', 'Date'])
+                df_tmp = df.append(last).sort_index()
 
-            # predict
-            df_met = self._get_indicators(symbol, df_tmp)
+                # predict
+                df_met = self._get_indicators(symbol, df_tmp)
+                ob = df_met.tail(1).drop(['Date', 'AdjClose'], axis=1)
+                action, _ = self.model.predict(ob)
+                actions[i] = action
+
+            df_preds = pd.DataFrame({'Price': pxs, 'Chg': pxchgs,
+                                     'Action': actions})
+            return df_preds
+        else:
+            df_met = self._get_indicators(symbol, df)
             ob = df_met.tail(1).drop(['Date', 'AdjClose'], axis=1)
             action, _ = self.model.predict(ob)
-            actions[i] = action
-
-        df_preds = pd.DataFrame({'Price': pxs, 'Chg': pxchgs,
-                                 'Action': actions})
-        return df_preds
+            return action
 
     def debugcb(self, _locals, _globals):
         self.n_steps += 1
@@ -223,8 +230,8 @@ class StrategyLearner:
 
 if __name__ == '__main__':
     lrnr = StrategyLearner()
-    symbol = 'HELE'
-    sd = dt.datetime(2000, 1, 2)
+    symbol = 'PRPL'
+    sd = dt.datetime(2018, 1, 29)
     ed = dt.datetime(2019, 12, 20)
 
     # train model
@@ -242,4 +249,4 @@ if __name__ == '__main__':
     if True:
         preds = lrnr.predict(symbol, loadpath=f'models/deepq_{symbol}',
                              sd=sd, ed=ed)
-        print(preds)
+        print(f'preds: {preds}')
