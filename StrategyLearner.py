@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import indicators as indi
 import marketsimcode as msim
+import data_puller as dp
 from LoanEnv import LoanEnv
 from Plotter import Plotter
 from StackedPlotter import StackedPlotter
@@ -76,6 +77,7 @@ class StrategyLearner:
                    should_save=False, save_path=None, stack_plot=True):
         df_trades = self.test_policy(symbol=symbol, sd=sd, ed=ed, sv=sv,
                                      notional=notional)
+        print(df_trades.tail(10))
         sp = msim.compute_portvals(df_trades, start_val=sv,
                                    commission=commission, impact=impact)
         bp = self.benchmark_policy(symbol, sd=sd, ed=ed, sv=sv,
@@ -164,6 +166,43 @@ class StrategyLearner:
                                      commission=commission, impact=impact)
         return vals.rename(symbol)
 
+    def predict(self, symbol, loadpath=None, sd=dt.datetime(2018, 1, 29),
+                ed=dt.datetime(2019, 12, 18)):
+        # update data
+        dp.pull(symbol, should_save=True)
+        dp.pull('SPY', should_save=True)
+
+        # load data and add phantom SPY trading day
+        df = self._load_data([symbol], sd, ed)
+        lastspy = df.loc['SPY'].tail(1).copy()
+        lastspy.index = lastspy.index.shift(1, freq='D')
+        lastspy['Symbol'] = 'SPY'
+        lastspy = lastspy.reset_index().set_index(['Symbol', 'Date'])
+        df = df.append(lastspy).sort_index()
+
+        # load model and predict for test range
+        self.model = DQN.load(loadpath)
+        chgs = np.linspace(-0.2, 0.2, num=41)
+        pxs = chgs + df.loc[symbol].tail(1).copy().AdjClose.values[0]
+        actions = np.zeros((41,))
+        for i, px in enumerate(pxs):
+            last = df.loc[symbol].tail(1).copy()
+            last.index = last.index.shift(1, freq='D')
+            last.AdjClose = px
+            last.Close = px
+            last['Symbol'] = symbol
+            last = last.reset_index().set_index(['Symbol', 'Date'])
+            df_tmp = df.append(last).sort_index()
+
+            # predict
+            df_met = self._get_indicators(symbol, df_tmp)
+            ob = df_met.tail(1).drop(['Date', 'AdjClose'], axis=1)
+            action, _ = self.model.predict(ob)
+            actions[i] = action
+
+        df_preds = pd.DataFrame({'Price': pxs, 'Action': actions})
+        return df_preds
+
     def debugcb(self, _locals, _globals):
         self.n_steps += 1
 
@@ -184,8 +223,7 @@ if __name__ == '__main__':
     lrnr = StrategyLearner()
     symbol = 'PRPL'
     sd = dt.datetime(2018, 1, 29)
-    ed = dt.datetime(2019, 12, 16)
-    # cd = dt.datetime(2019, 12, 17)
+    ed = dt.datetime(2019, 12, 19)
 
     # train model
     if False:
@@ -194,9 +232,14 @@ if __name__ == '__main__':
                    savepath=f'models/deepq_{symbol}')
 
     # load saved model
-    if True:
+    if False:
         lrnr.load_model(symbol=symbol, sd=sd, ed=ed,
                         loadpath=f'models/deepq_{symbol}')
 
-    lrnr.cmp_policy(symbol=symbol, sd=sd, ed=ed, sv=1e5, notional=1e3,
-                    commission=1e3*0.01, impact=0.0, should_show=True)
+    if True:
+        preds = lrnr.predict(symbol, loadpath=f'models/deepq_{symbol}',
+                             sd=sd, ed=ed)
+        print(preds)
+    # lrnr.cmp_policy(symbol=symbol, sd=sd, ed=ed, sv=1e5, notional=1e3,
+    #                commission=1e3*0.01, impact=0.0, should_show=True)
+    # shift index date and predict across range of values for following day
