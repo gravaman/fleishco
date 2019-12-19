@@ -77,7 +77,6 @@ class StrategyLearner:
                    should_save=False, save_path=None, stack_plot=True):
         df_trades = self.test_policy(symbol=symbol, sd=sd, ed=ed, sv=sv,
                                      notional=notional)
-        print(df_trades.tail(10))
         sp = msim.compute_portvals(df_trades, start_val=sv,
                                    commission=commission, impact=impact)
         bp = self.benchmark_policy(symbol, sd=sd, ed=ed, sv=sv,
@@ -182,12 +181,14 @@ class StrategyLearner:
 
         # load model and predict for test range
         self.model = DQN.load(loadpath)
-        chgs = np.linspace(-0.2, 0.2, num=41)
+        chgs = np.linspace(-4, 4, num=33)
         pxs = chgs + df.loc[symbol].tail(1).copy().AdjClose.values[0]
-        actions = np.zeros((41,))
+        pxchgs = np.zeros((33,))
+        actions = np.zeros((33,))
         for i, px in enumerate(pxs):
             last = df.loc[symbol].tail(1).copy()
             last.index = last.index.shift(1, freq='D')
+            pxchgs[i] = px/last.AdjClose-1
             last.AdjClose = px
             last.Close = px
             last['Symbol'] = symbol
@@ -200,7 +201,8 @@ class StrategyLearner:
             action, _ = self.model.predict(ob)
             actions[i] = action
 
-        df_preds = pd.DataFrame({'Price': pxs, 'Action': actions})
+        df_preds = pd.DataFrame({'Price': pxs, 'Chg': pxchgs,
+                                 'Action': actions})
         return df_preds
 
     def debugcb(self, _locals, _globals):
@@ -221,13 +223,13 @@ class StrategyLearner:
 
 if __name__ == '__main__':
     lrnr = StrategyLearner()
-    symbol = 'PRPL'
-    sd = dt.datetime(2018, 1, 29)
-    ed = dt.datetime(2019, 12, 19)
+    symbol = 'HELE'
+    sd = dt.datetime(2000, 1, 2)
+    ed = dt.datetime(2019, 12, 20)
 
     # train model
     if False:
-        tsteps = int(1e5)
+        tsteps = int(9.5e5)
         lrnr.train(symbol=symbol, time_steps=tsteps, sd=sd, ed=ed,
                    savepath=f'models/deepq_{symbol}')
 
@@ -235,11 +237,9 @@ if __name__ == '__main__':
     if False:
         lrnr.load_model(symbol=symbol, sd=sd, ed=ed,
                         loadpath=f'models/deepq_{symbol}')
-
+        lrnr.cmp_policy(symbol=symbol, sd=sd, ed=ed, sv=1e5, notional=1e3,
+                        commission=1e3*0.01, impact=0.0, should_show=True)
     if True:
         preds = lrnr.predict(symbol, loadpath=f'models/deepq_{symbol}',
                              sd=sd, ed=ed)
         print(preds)
-    # lrnr.cmp_policy(symbol=symbol, sd=sd, ed=ed, sv=1e5, notional=1e3,
-    #                commission=1e3*0.01, impact=0.0, should_show=True)
-    # shift index date and predict across range of values for following day
