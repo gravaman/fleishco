@@ -183,10 +183,10 @@ class StrategyLearner:
         # load model and predict for test range
         self.model = DQN.load(loadpath)
         if fwd:
-            chgs = np.linspace(-0.2, 0.2, num=41)
+            chgs = np.linspace(-0.5, 0.5, num=101)
             pxs = chgs + df.loc[symbol].tail(1).copy().AdjClose.values[0]
-            pxchgs = np.zeros((41,))
-            actions = np.zeros((41,))
+            pxchgs = np.zeros((101,))
+            actions = np.zeros((101,))
             for i, px in enumerate(pxs):
                 last = df.loc[symbol].tail(1).copy()
                 last.index = last.index.shift(1, freq='D')
@@ -232,7 +232,7 @@ if __name__ == '__main__':
     lrnr = StrategyLearner()
     symbol = 'PRPL'
     sd = dt.datetime(2018, 1, 29)
-    ed = dt.datetime(2019, 12, 20)
+    ed = dt.datetime(2020, 1, 14)
 
     # train model
     if False:
@@ -248,5 +248,6 @@ if __name__ == '__main__':
                         commission=1e3*0.01, impact=0.0, should_show=True)
     if True:
         preds = lrnr.predict(symbol, loadpath=f'models/deepq_{symbol}',
-                             sd=sd, ed=ed)
-        print(f'preds: {preds}')
+                             sd=sd, ed=ed, fwd=True)
+        pd.set_option('display.max_rows', None)
+        print(preds)
