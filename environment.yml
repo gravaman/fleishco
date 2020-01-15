@@ -18,6 +18,7 @@ dependencies:
         - tqdm=4.36.1
         - networkx
         - pytables
+        - requests
         - pip:
                 - pprofile
                 - jsons
@@ -25,3 +26,4 @@ dependencies:
                 - tensorflow==1.14.0
                 - yfinance
                 - lxml
+                - beautifulsoup4
