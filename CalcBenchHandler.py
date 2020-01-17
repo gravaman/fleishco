@@ -265,7 +265,6 @@ class CalcBenchHandler:
 
         # add names for identification
         for (cid, dfout) in zip(cids, dfouts):
-            print('adding cid as name:', cid)
             dfout.name = cid
         return dfouts
 
@@ -292,6 +291,16 @@ if __name__ == '__main__':
     save_dir = 'data/financials'
     cik_dir = 'data/ciks'
     ticker_path = 'data/ciks/tickers.csv'
+    ciks_path = 'data/ciks/equities.csv'
+
+    if False:
+        ciks = pd.read_csv(ciks_path, dtype=str).cik.values
+        cbh = CalcBenchHandler(save_dir=save_dir)
+        dfs = cbh.fetch_all(company_identifiers=ciks, start_year=2018,
+                            start_period=1, end_year=2019, end_period=4,
+                            period_type='quarterly')
+        for df in dfs:
+            print(f'{df.name}\n{df}')
 
     if False:
         cbh = CalcBenchHandler(save_dir=save_dir)
