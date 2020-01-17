@@ -75,6 +75,7 @@ class CalcBenchHandler:
     def all_colnames(self):
         if self._all_colnames is None:
             self._all_colnames = self.all_metrics()
+            self._all_colnames.insert(2, 'period')
         return self._all_colnames.copy()
 
     @property
@@ -115,7 +116,6 @@ class CalcBenchHandler:
             mets = getattr(self, k)
             outs += mets.copy()
         return outs
-        # return self.DEI.copy()+self.INS.copy()+self.BS.copy()+self.CFS.copy()
 
     def fetch_dates(self, company_identifiers=None, start_year=None,
                     start_period=None, end_year=None, end_period=None,
@@ -145,6 +145,74 @@ class CalcBenchHandler:
         # make req, clean res, conditionally save
         df = self._cb_fetch(**kwargs)
         dfouts = self._split_by_cid(df, colnames=self.ins_colnames)
+
+        if self.save_dir:
+            self._save_data(dfouts)
+
+        return dfouts
+
+    def fetch_bs(self, company_identifiers=None, start_year=None,
+                 start_period=None, end_year=None, end_period=None,
+                 period_type=None):
+        # build required args for calcbench api call
+        kwargs = locals()
+        kwargs.pop('self', None)
+        kwargs['metrics'] = self.DEI+self.BS
+
+        # make req, clean res, conditionally save
+        df = self._cb_fetch(**kwargs)
+        dfouts = self._split_by_cid(df, colnames=self.bs_colnames)
+
+        if self.save_dir:
+            self._save_data(dfouts)
+
+        return dfouts
+
+    def fetch_cfs(self, company_identifiers=None, start_year=None,
+                  start_period=None, end_year=None, end_period=None,
+                  period_type=None):
+        # build required args for calcbench api call
+        kwargs = locals()
+        kwargs.pop('self', None)
+        kwargs['metrics'] = self.DEI+self.CFS
+
+        # make req, clean res, conditionally save
+        df = self._cb_fetch(**kwargs)
+        dfouts = self._split_by_cid(df, colnames=self.cfs_colnames)
+
+        if self.save_dir:
+            self._save_data(dfouts)
+
+        return dfouts
+
+    def fetch_debt(self, company_identifiers=None, start_year=None,
+                   start_period=None, end_year=None, end_period=None,
+                   period_type=None):
+        # build required args for calcbench api call
+        kwargs = locals()
+        kwargs.pop('self', None)
+        kwargs['metrics'] = self.DEI+self.DEBT
+
+        # make req, clean res, conditionally save
+        df = self._cb_fetch(**kwargs)
+        dfouts = self._split_by_cid(df, colnames=self.debt_colnames)
+
+        if self.save_dir:
+            self._save_data(dfouts)
+
+        return dfouts
+
+    def fetch_all(self, company_identifiers=None, start_year=None,
+                  start_period=None, end_year=None, end_period=None,
+                  period_type=None):
+        # build required args for calcbench api call
+        kwargs = locals()
+        kwargs.pop('self', None)
+        kwargs['metrics'] = self.all_metrics()
+
+        # make req, clean res, conditionally save
+        df = self._cb_fetch(**kwargs)
+        dfouts = self._split_by_cid(df, colnames=self.all_colnames)
 
         if self.save_dir:
             self._save_data(dfouts)
@@ -194,9 +262,9 @@ if __name__ == '__main__':
     company_identifiers = ['FUN', 'SIX']
     save_dir = 'data/financials'
 
-    if True:
+    if False:
         cbh = CalcBenchHandler(save_dir=save_dir)
-        dfs = cbh.fetch_ins(company_identifiers=company_identifiers,
+        dfs = cbh.fetch_all(company_identifiers=company_identifiers,
                             start_year=2018, start_period=1, end_year=2019,
                             end_period=4, period_type='quarterly')
         for df in dfs:
