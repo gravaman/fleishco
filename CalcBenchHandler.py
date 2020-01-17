@@ -1,5 +1,6 @@
 from pathlib import Path
 import calcbench
+import pandas as pd
 
 
 calcbench.enable_backoff()
@@ -41,7 +42,8 @@ class CalcBenchHandler:
             'lineofcreditfacilityamountoutstanding', 'secureddebt',
             'seniornotes', 'subordinateddebt', 'convertibledebt',
             'termloan', 'mortgagedebt', 'unsecureddebt',
-            'mediumtermnotes', 'trustpreferredsecurities']
+            'mediumtermnotes', 'trustpreferredsecurities',
+            'commercialpaper']
     STD_MET = ['DEI', 'INS', 'BS', 'CFS']
 
     def __init__(self, save_dir=None, verbose=True):
@@ -219,6 +221,33 @@ class CalcBenchHandler:
 
         return dfouts
 
+    def fetch_ciks(self, ticker_path):
+        # fetch ciks from tickers
+        tickers = pd.read_csv(ticker_path).ticker.values
+        if self.verbose:
+            print(f'fetching ciks for {tickers}')
+        kwargs = dict(company_identifiers=tickers,
+                      metrics=['ticker', 'centralindexkey'])
+
+        # clean res to recombine ciks
+        df = self._cb_fetch(**kwargs)
+        df = df.reset_index()
+        prefix = df.period.astype(str).values
+        cikser = df.stack().droplevel(0).centralindexkey.dropna()
+        ciks = prefix+cikser.values.astype(str)
+        ciks = [cik.split('.', 1)[0] for cik in ciks]
+        data = {'ticker': df.ticker.values[0], 'cik': ciks}
+        dfciks = pd.DataFrame(data).set_index('ticker')
+
+        if self.save_dir:
+            self._check_dir()
+            path = f'{self.save_dir}/equities.csv'
+            dfciks.to_csv(path)
+            if self.verbose:
+                print(f'data saved to {path}')
+
+        return dfciks
+
     def _cb_fetch(self, **kwargs):
         return calcbench.standardized_data(**kwargs)
 
@@ -259,13 +288,20 @@ class CalcBenchHandler:
 
 if __name__ == '__main__':
     print(f'CalcBenchHandler Running')
-    company_identifiers = ['FUN', 'SIX']
+    company_identifiers = ['0000811532', '0000701374']
     save_dir = 'data/financials'
+    cik_dir = 'data/ciks'
+    ticker_path = 'data/ciks/tickers.csv'
 
     if False:
         cbh = CalcBenchHandler(save_dir=save_dir)
-        dfs = cbh.fetch_all(company_identifiers=company_identifiers,
+        dfs = cbh.fetch_ins(company_identifiers=company_identifiers,
                             start_year=2018, start_period=1, end_year=2019,
                             end_period=4, period_type='quarterly')
         for df in dfs:
             print(f'{df.name}\n{df}')
+
+    if False:
+        cbh = CalcBenchHandler(save_dir=cik_dir)
+        df = cbh.fetch_ciks(ticker_path)
+        print(df)
