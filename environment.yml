@@ -27,3 +27,5 @@ dependencies:
                 - yfinance
                 - lxml
                 - beautifulsoup4
+                - calcbench-api-client
+                - backoff
