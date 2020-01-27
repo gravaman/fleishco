@@ -12,6 +12,7 @@ dependencies:
         - psycopg2
         - jupyter
         - jupyterlab
+        - ipython
         - pip
         - scikit-learn
         - imageio=2.5.0
@@ -22,7 +23,6 @@ dependencies:
         - pip:
                 - pprofile
                 - jsons
-                - stable-baselines[mpi]
                 - tensorflow==1.14.0
                 - yfinance
                 - lxml
