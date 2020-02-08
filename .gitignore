@@ -7,3 +7,4 @@ Lists
 tmp
 __pycache__
 output
+ec2-user*
