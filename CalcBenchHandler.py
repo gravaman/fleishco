@@ -46,7 +46,7 @@ class CalcBenchHandler:
             'commercialpaper']
     STD_MET = ['DEI', 'INS', 'BS', 'CFS']
 
-    def __init__(self, save_dir=None, verbose=True):
+    def __init__(self, save_dir=None, verbose=False):
         # sanity check
         if save_dir and not isinstance(save_dir, str):
             msg = (
