@@ -13,10 +13,6 @@ import numpy as np
 from CalcBenchHandler import CalcBenchHandler as CBH
 
 
-# s3 connection
-conn = s3fs.S3FileSystem(anon=False)
-
-
 class CBCleaner(CBH):
     FS_COLS = CBH.INS+CBH.CFS+CBH.BS
     SHARE_COLS = [
@@ -133,6 +129,9 @@ class CBCleaner(CBH):
         # get list of tickers with available financials
         financials_path = join(financials_dir, f'{ticker}.csv')
 
+        # s3 connection
+        conn = s3fs.S3FileSystem(anon=False)
+
         # check financials exist
         if not conn.exists(financials_path):
             if self.verbosity > 0:
@@ -143,7 +142,8 @@ class CBCleaner(CBH):
                 print(msg)
             return
 
-        dffin = pd.read_csv(conn.open(financials_path, 'rb'))
+        with conn.open(financials_path, 'rb') as f:
+            dffin = pd.read_csv(f)
 
         # clean earnings_release_date
         dffin.earnings_release_date = pd.to_datetime(
@@ -181,14 +181,16 @@ class CBCleaner(CBH):
         loc = eqy_pxs_path.split('/')
         ticker = loc[-1].split('.csv')[0].upper()
 
+        # s3 connection
+        conn = s3fs.S3FileSystem(anon=False)
+
         # check price data exists
         if not conn.exists(eqy_pxs_path):
-            if self.verbosity > 0:
-                print(f'no price data found at {eqy_pxs_path}')
             return
 
         # load px data
-        eqypxs = pd.read_csv(conn.open(eqy_pxs_path, 'rb'))
+        with conn.open(eqy_pxs_path, 'rb') as f:
+            eqypxs = pd.read_csv(f)
         eqypxs = eqypxs.rename(columns={'Adj Close': 'AdjClose'})
 
         if (self.verbosity > 1) & (eqypxs.shape[0] <= 0):
@@ -242,42 +244,29 @@ class CBCleaner(CBH):
                 if save_dir is not None:
                     ydata.to_csv(f'{save_dir}/{ticker.upper()}.csv',
                                  index=True)
-
-                if self.verbosity == 2:
-                    msg = (
-                        f'{ydata.shape[0]} {ticker.upper()} '
-                        f'equity price data saved to '
-                        f'{save_dir}/{ticker.upper()}.csv'
-                    )
-                    print(msg)
             else:
                 missed.append(tick)
 
-                if self.verbosity == 2:
-                    msg = (
-                        f'no equity price data found for {ticker.upper()} '
-                    )
-                    print(msg)
+            if self.verbosity > 0:
+                complete = (len(hit)+len(missed))/len(tickers)*100
+                lgr = get_logger()
+                lgr.info(f'{ticker} | hits: {len(hit):,} ({complete:.0f})%')
 
             # don't overwhelm yhoo and get yourself throttled
             time.sleep(secs)
-
-        if self.verbosity > 0:
-            print('\nEquity Data Pull Summary:')
-            prefix = '\t'
-            print(prefix, f'price count: {total}')
-            print(prefix, f'ticker hit count: {len(hit)}')
-            print(prefix, f'ticker miss count: {len(missed)}')
-            print()
 
         return hit, missed
 
     def build_txs(self, ticker, eqy_pxs_dir=None,
                   financials_dir=None, save_dir=None):
+        # get id for logging
+        p = current_process()._identity
+        jid = 0 if len(p) == 0 else p[0]
+
         # load relevant data
         dffin = self.load_financials(ticker, financials_dir)
         if dffin is None:
-            return
+            return jid, None
 
         # group financials by trailing 2 year period
         dlt = pd.offsets.DateOffset(years=1, months=11)
@@ -298,6 +287,10 @@ class CBCleaner(CBH):
                                   ascending=[True, True])
         dffin = dffin.groupby('last_dt').filter(lambda g: len(g) == 8)
 
+        # check whether there are relevant financials
+        if dffin.shape[0] == 0:
+            return jid, None
+
         # flatten financials into trailing 2 year period
         groups = dffin.groupby('last_dt')[self._dffin_cols]
         dffin_flat = groups.apply(self._flattener).droplevel(level=1)
@@ -305,8 +298,8 @@ class CBCleaner(CBH):
 
         # pull equity prices
         df_eqypxs = self.load_eqy_pxs(f'{eqy_pxs_dir}/{ticker}.csv')
-        if df_eqypxs is None:
-            return
+        if df_eqypxs is None or df_eqypxs.shape[0] == 0:
+            return jid, None
 
         # filter prices for relevant transaction dates
         dftxs = self.get_txs_by_ticker(ticker)
@@ -318,6 +311,10 @@ class CBCleaner(CBH):
         df_tx_in.index.name = 'trans_dt'
         df_tx_in = df_tx_in.reset_index().sort_values(by=['trans_dt'],
                                                       ascending=True)
+
+        # check whether there are relevant rxs
+        if df_tx_in.shape[0] == 0:
+            return jid, None
 
         # merge with financials
         df_tx_in = pd.merge_asof(df_tx_in, dffin_flat,
@@ -337,8 +334,6 @@ class CBCleaner(CBH):
 
         # pull relevant cols and clean up
         df_tx_in = df_tx_in[self._out_cols].dropna()
-        p = current_process()._identity
-        jid = 0 if len(p) == 0 else p[0]
 
         if save_dir is not None:
             txcnt = df_tx_in.shape[0]
@@ -495,6 +490,58 @@ def spawn_cleaner(ticker, kwargs):
     lgr.info(progress_msg(ticker, st, jid, tx_cnt))
 
 
+EXCLUDES = [
+    'ABCD', 'ABS', 'ABX', 'ACL', 'ACV', 'ADPT', 'AEGR', 'AEPI',
+    'AFFX', 'AER', 'AFSI', 'AIQ', 'AL', 'ALJ', 'ALTR', 'AM',
+    'AMMD', 'AMRE', 'AMLN', 'AMRI', 'AONE', 'ANR', 'ANV', 'APFC',
+    'APL', 'APC', 'ARDX', 'ARG', 'ASCA', 'ASCMA', 'ARRY', 'AT',
+    'ARII', 'ATPG', 'AVTR', 'AVIV', 'AUDC', 'AUXL', 'AWH', 'BABA',
+    'BCE', 'BBEP', 'BEAV', 'BIDU', 'BBG', 'BCR', 'BJS', 'BIOA',
+    'BEL', 'BKW', 'BLC', 'BMO', 'BMR', 'BG', 'BNS', 'BMS', 'BP',
+    'BONT', 'BRCM', 'BPL', 'BRK', 'BRCD', 'EEQ', 'EQ', 'DLPH',
+    'CSIQ', 'FSL', 'ENH', 'BRSS', 'EFII', 'DRC', 'CVC', 'DYN',
+    'EAC', 'EXAM', 'ENOC', 'ENP', 'GENZ', 'GEOY', 'FTK', 'EXL',
+    'EXXI', 'CBST', 'CIT', 'CSR', 'CKEC', 'CA', 'GGS', 'CYN',
+    'CVRR', 'BSFT', 'CWEI', 'CSTR', 'CSWC', 'CNF', 'CNHI',
+    'FCEA', 'FLR', 'FFC', 'CLWR', 'CFBI', 'CWTR', 'CCIX', 'CNK',
+    'CNL', 'CRDN', 'FLY', 'CLD', 'DRYS', 'DT', 'CRTX', 'GAS',
+    'DNDN', 'CHRS', 'CNQR', 'CRWN', 'END', 'BTU', 'CHTR', 'FIG',
+    'FISH', 'BWP', 'ACET', 'EPB', 'APU', 'HTCH', 'ITMN', 'GOK',
+    'DVR', 'CMLS', 'IM', 'IPCC', 'HE', 'DLLR', 'HOT', 'HS',
+    'EROC', 'CMRE', 'HLT', 'HMA', 'HELI', 'ENGY', 'ESL', 'EVER',
+    'DOW', 'DOX', 'CBE', 'CPHD', 'CPNO', 'HGSI', 'HIW', 'INSP',
+    'DRIV', 'CPX', 'CQB', 'JONE', 'JRCC', 'HAR', 'CENX', 'CEPH',
+    'IRC', 'GR', 'GRM', 'KEYW', 'KRN', 'KGC', 'IX', 'JAG',
+    'JAKK', 'ITC', 'ITP', 'EDE', 'EDR', 'HTLF', 'HTWR', 'LMIA', 'EPL', 'LBTYA',
+    'I', 'LCC', 'MAIN', 'JD', 'JDAS', 'MANT', 'LVLT', 'IDC', 'IDTI', 'LNCR',
+    'LNKD', 'MCP', 'MDAS', 'FNSR', 'LVS', 'EQY', 'MDSO', 'FRZ', 'MHGC',
+    'INVN', 'IGT', 'CIE', 'MPG', 'MPO', 'LEXG', 'LGF', 'MHS', 'DFT', 'MRD',
+    'MRGE', 'MDP', 'MRH', 'MIG', 'NHP', 'KOG', 'N', 'MIR', 'MDSN', 'MAST',
+    'NSR', 'HCCH', 'HCM', 'NAVG', 'CALD', 'CALL', 'NTI', 'NTK', 'NFP', 'NIHD',
+    'NKA', 'NWK', 'DB', 'NOR', 'NPBC', 'NRX', 'KWK', 'DBD', 'DBRN', 'NGLS',
+    'NH', 'CME', 'DCT', 'NVS', 'NMR', 'MELI', 'MENT', 'OCR', 'OEC', 'LAYN',
+    'NWS', 'NXPI', 'PKD', 'NEWS', 'CTV', 'NSM', 'CXP', 'PRFT', 'PWAV', 'P',
+    'PLL', 'PX', 'PRI', 'PTP', 'PTRY', 'PTV', 'REV', 'MF', 'REXX', 'RFMD',
+    'OMED', 'PVR', 'PRSC', 'ONCS', 'ONE', 'RGC', 'RRMS', 'SCTY', 'PCL',
+    'RRR', 'MON', 'RICE', 'SD', 'PCP', 'SDC', 'PD', 'QLTY', 'QRE', 'SFG',
+    'SFLY', 'SFUN', 'SGY', 'MOTR', 'SHLM', 'SIX', 'SQNM', 'SUSS', 'SVM',
+    'PBG', 'OREX', 'RY', 'SEP', 'SVU', 'RA', 'TDW', 'RYL', 'RSPP', 'RTI',
+    'PMDX', 'TNB', 'TRAK', 'TRNX', 'TRP', 'PPC', 'STR', 'RAH', 'TRS', 'RAS',
+    'RATE', 'TWTC', 'STRI', 'SALM', 'SARA', 'TRW', 'TXI', 'TRH', 'TRK',
+    'TRLA', 'SUG', 'TSRO', 'ROC', 'UDRL', 'PBR', 'TAL', 'TAM', 'SUNH',
+    'SUSQ', 'TUC', 'TOL', 'TOT', 'TSS', 'TSYS', 'PBY', 'ROSE', 'OXM', 'VQ',
+    'VTSS', 'TD', 'TK', 'USAS', 'SCHS', 'TPCG', 'WCRX', 'VR', 'TLP', 'USG',
+    'VRS', 'SPI', 'PSSI', 'TYC', 'UIL', 'WNR', 'WOLF', 'XIDE', 'SPLS',
+    'SPNC', 'PPO', 'PPS', 'ZZ', 'TZOO', 'UBS', 'WB', 'WBMD', 'VBLT', 'XL',
+    'WPZ', 'VC', 'VCI', 'UTIW', 'SPTN', 'WWAV', 'WRES', 'WSTC', 'XNPT',
+    'VTG', 'STEI', 'VIAS', 'VLP', 'WGL', 'WH', 'XTO', 'XXIA', 'VMEM',
+    'VNR', 'VOLC', 'VPHM', 'XRM', 'XCO', 'MWE', 'SLXP', 'PGEM', 'URS',
+    'GST', 'GTIV', 'GM', 'GMXR', 'CIK0001645494', 'LZ', 'FDO', 'FES',
+    'KFN', 'LLTC', 'SIAL', 'SONO', 'SNDK', 'SPC', 'LXK', 'MJN', 'REN', 'SYA',
+    'LLL', 'RDC', 'SWY', 'TE', 'NG', 'RESI', 'TWGP', 'TWC', 'TEP', 'SNX',
+    'WIN', 'MA', 'TERP', 'WMG'
+]
+
 if __name__ == '__main__':
     # setup cli arg parser
     base_s3 = 's3://elm-credit'
@@ -523,6 +570,9 @@ if __name__ == '__main__':
     parser.add_argument('--verbosity',
                         choices=[0, 1, 2], type=int, default=0,
                         help='verbosity level (0=off, 1=mild, 2=high)')
+    parser.add_argument('--limit',
+                        type=int,
+                        help='ticker processing limit count')
     args = parser.parse_args()
 
     if args.pool_size is not None and args.pool_size < 1:
@@ -537,6 +587,9 @@ if __name__ == '__main__':
     formatter = logging.Formatter('[%(asctime)s %(levelname)s] %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+
+    # s3 connection
+    conn = s3fs.S3FileSystem(anon=False)
 
     # get list of tickers
     ufp = args.financials_dir.split('s3://')[-1]
@@ -579,12 +632,19 @@ if __name__ == '__main__':
     else:
         raise ValueError('no financials found at {args.financials_dir}')
 
-    ts = [t for t in universe if t not in priors]
-    ts = [t for t in ts if t in fins]
-    logger.info(f'remaining tickers: {len(ts)}')
+    # clear fs cache to ensure multiprocessing instances created
+    conn.clear_instance_cache()
 
-    # TESTING TICKERS
-    ts = ['AAN', 'FUN']
+    # filter prior and no financials from tickers
+    # filter prior misses (no relevant financials or equity prices)
+    # limit processing based on cli input
+    ts_miss = priors + EXCLUDES
+    ts = [t for t in universe if t not in ts_miss]
+    ts = [t for t in ts if t in fins]
+    remain = len(ts)
+    if args.limit:
+        ts = ts[:args.limit]
+    logger.info(f'processing {len(ts)} of {remain} remaining tickers')
 
     date_str = dt.datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
     ticker_list_path = f'data/ticker_pipeline_{date_str}.csv'
