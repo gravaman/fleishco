@@ -1,5 +1,7 @@
 from os import listdir
 from os.path import join, isfile
+from datetime import datetime
+from uuid import uuid4
 import pandas as pd
 import numpy as np
 import s3fs
@@ -13,18 +15,21 @@ class DataSelector:
     CIKS_META_PATH = 'ciks/companies.csv'  # ticker/cik meta info (naics, sic)
     CIK_CUSIP_LINK_PATH = 'ciks/CIK_CUSIP.csv'  # cik cusip linker
     BOND_MASTER_PATH = 'bonds/master_file.csv'  # issuer meta by cusip
+    TS_OUTPUT_DIR = 'bonds/ticker_lists'  # output dir for ticker meta storage
+    DATA_OUTPUT_DIR = 'bonds/combined'  # output dir for consolidated datasets
     TS_META_COLS = [
         'ticker', 'entity_name', 'cik_code', 'sic_code',
         'naics_code', 'SICGroupMinorGroupTitle'
     ]
     CIK_CUSIP_COLS = ['CIK', 'CUSIP', 'CUSIP6']
     BOND_META_COLS = [
-        'cusip_id', 'bond_sym_id', 'company_symbol', 'debt_type_cd',
+        'bond_sym_id', 'cusip_id', 'bond_sym_id', 'company_symbol', 'debt_type_cd',
         'issuer_nm', 'cpn_rt', 'cpn_type_cd',
         'trd_rpt_efctv_dt', 'mtrty_dt', 'cnvrb_fl', 'sub_prdct_type',
     ]
     ORDERED_MASTER_COLS = [
-        'cusip_id', 'debt_type_cd', 'cpn_rt', 'trd_rpt_efctv_dt', 'mtrty_dt'
+        'bond_sym_id', 'cusip_id', 'debt_type_cd', 'cpn_rt', 'trd_rpt_efctv_dt',
+        'mtrty_dt'
     ]
     BOND_DATE_COLS = [
         'trd_rpt_efctv_dt', 'mtrty_dt'
@@ -93,7 +98,7 @@ class DataSelector:
         ts = [t.split('.csv')[0] for t in ts]
         return ts
     
-    def fetch_issuance_meta(self, ts):
+    def fetch_issuance_meta(self, ts, save=False):
         """
             Generates descriptive meta df for tickers.
             
@@ -186,13 +191,64 @@ class DataSelector:
         dfout = dfout[(dfout.naics_code == 0) | (dfout.naics_code.str[:2].isin(self.VALID_NAICS))]
         dfout = dfout[~dfout.naics_code.isin(self.INVALID_NAICS)]
         dfout = dfout[~dfout.ticker.isin(self.INVALID_TICKERS)]
+        dfout = dfout.drop_duplicates(subset=['ticker', 'CUSIP', 'cik_code'])
         
-        return dfout.drop_duplicates(subset=['ticker', 'CUSIP', 'cik_code'])
+        # save ticker meta df
+        if save:
+            dtstr = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-')
+            outpath = 'tickers_'+dtstr+str(uuid4())
+            save_path = join(self.base_url, self.TS_OUTPUT_DIR, outpath)
+            dfout.to_csv(save_path, index=False)
     
+        return dfout
     
+    def build_dataset(self, tickers_path, nrows=5000, ntickers=None,
+                      save=False):
+        tickers_url = join(self.base_url, self.TS_OUTPUT_DIR, tickers_path)
+        if self._is_local:
+            dfts = pd.read_csv(tickers_url)
+        else:
+            with self._conn.open(tickers_url) as f:
+                dfts = pd.read_csv(f)
+                
+        # get tickers and conditionally cap
+        ts = dfts.ticker.unique()
+        if ntickers is not None:
+            ts = np.random.choice(ts, min(ntickers, ts.shape[0]))
+            
+        # pull raw tx data for tickers
+        txs = []
+        ps = [join(self.base_url, self.BONDS_TXS_DIR, f'{t}.csv') for t in ts]
+        for t, p in zip(ts, ps):
+            with self._conn.open(p) as f:
+                df = pd.read_csv(f)
+                # sample if record count above row cap
+                if df.shape[0] > nrows:
+                    df = df.sample(n=nrows)
+                txs.append(df)
+
+        df = pd.concat(txs, ignore_index=True)
+        
+        # scrub-a-dub
+        # only keep valid debt types
+        # consolidate similar security and seniority
+        df = df[df.debt_type_cd.isin(self.VALID_DEBT_TYPES)]
+        df.loc[(df.debt_type_cd.isin(self.SR_CODE_CVT), 'debt_type_cd')] = 'S-NT'
+        df.loc[(df.debt_type_cd.isin(self.SUB_CODE_CVT), 'debt_type_cd')] = 'SRSUBNT'
+
+        # save consolidated data
+        if save:
+            dtstr = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-')
+            outpath = 'txs_'+dtstr+str(uuid4())
+            save_path = join(self.base_url, self.DATA_OUTPUT_DIR, outpath)
+            df.to_csv(save_path, index=False)
+
+        return df
+
+
 if __name__ == '__main__':
-    # example usage for locally pulling issuance meta info
+    # example usage for locally pulling and storing issuance meta info
     ds = DataSelector(is_local=True)
     ts = ds.fetch_tickers()
-    df = ds.fetch_issuance_meta(ts)
+    df = ds.fetch_issuance_meta(ts, save=True)
     print(df.head())
