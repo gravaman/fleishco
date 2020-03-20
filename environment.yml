@@ -1,6 +1,7 @@
 name: fleishco
 channels:
         - conda-forge
+        - pytorch
         - defaults
 dependencies:
         - python=3.7
@@ -22,12 +23,20 @@ dependencies:
         - requests
         - awscli
         - s3fs
+        - pytorch
+        - torchvision
+        - cudatoolkit=10.1
+        - tensorboard
+        - sqlalchemy
         - pip:
                 - pprofile
                 - jsons
-                - tensorflow==1.14.0
+                - tensorflow
                 - yfinance
                 - lxml
                 - beautifulsoup4
                 - calcbench-api-client
                 - backoff
+                - absl-py
+                - grpcio
+                - QuantLib

@@ -8,3 +8,8 @@ tmp
 __pycache__
 output
 ec2-user*
+*.log
+*.pt
+ibapi
+*.png
+runs

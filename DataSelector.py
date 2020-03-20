@@ -17,6 +17,12 @@ class DataSelector:
     BOND_MASTER_PATH = 'bonds/master_file.csv'  # issuer meta by cusip
     TS_OUTPUT_DIR = 'bonds/ticker_lists'  # output dir for ticker meta storage
     DATA_OUTPUT_DIR = 'bonds/combined'  # output dir for consolidated datasets
+    RATES_BAML_DIR = 'rates/baml'  # ytm by duration and credit rating
+    RATES_UST_DIR = 'rates/ust'  # ytm by duration for us treasuries
+    RATES_OUTPUT_DIR = 'rates/combined'  # output dir for consolidated rates
+    STATS_OUTPUT_PATH = 'bonds/datasets/tx_params.csv'  # output path for tx mean, std stats
+    BATCH_LIST_PATH = 'bonds/datasets/batch_paths.csv'  # output path for tx file list
+    BATCH_OUTPUT_DIR = 'bonds/batches'  # output dir for batches
     TS_META_COLS = [
         'ticker', 'entity_name', 'cik_code', 'sic_code',
         'naics_code', 'SICGroupMinorGroupTitle'
@@ -26,6 +32,10 @@ class DataSelector:
         'bond_sym_id', 'cusip_id', 'bond_sym_id', 'company_symbol', 'debt_type_cd',
         'issuer_nm', 'cpn_rt', 'cpn_type_cd',
         'trd_rpt_efctv_dt', 'mtrty_dt', 'cnvrb_fl', 'sub_prdct_type',
+    ]
+    INVALID_DATA_COLS = [
+        'mtrty_dt', 'bond_sym_id', 'company_symbol', 'issuer_nm', 'scrty_ds',
+        'close_pr', 'trans_dt', 'last_dt'
     ]
     ORDERED_MASTER_COLS = [
         'bond_sym_id', 'cusip_id', 'debt_type_cd', 'cpn_rt', 'trd_rpt_efctv_dt',
@@ -42,7 +52,8 @@ class DataSelector:
         'SUBDEB', 'SUBNT', 'TGNT', 'UN-BND', 'UN-DEB', 'UN-NT', 'UNNT'
     ]
     SR_CODE_CVT = [
-            'DEB', 'S-BND', 'S-DEB', 'SRDEB', 'SRNT', 'SR', 'UN-NT', 'UNNT'
+            'DEB', 'S-BND', 'S-DEB', 'SRDEB', 'SRNT', 'SR', 'UN-NT', 'UNNT',
+            'UN-DEB'
         ]
     SUB_CODE_CVT = ['B-BND', 'B-NT', 'SUB-DEB', 'SUBDEB', 'SUBNT', 'SB-NT']
     VALID_NAICS = [
@@ -196,7 +207,7 @@ class DataSelector:
         # save ticker meta df
         if save:
             dtstr = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-')
-            outpath = 'tickers_'+dtstr+str(uuid4())
+            outpath = 'tickers_'+dtstr+str(uuid4())+'.csv'
             save_path = join(self.base_url, self.TS_OUTPUT_DIR, outpath)
             dfout.to_csv(save_path, index=False)
     
@@ -239,16 +250,121 @@ class DataSelector:
         # save consolidated data
         if save:
             dtstr = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-')
-            outpath = 'txs_'+dtstr+str(uuid4())
+            outpath = 'txs_'+dtstr+str(uuid4())+".csv"
             save_path = join(self.base_url, self.DATA_OUTPUT_DIR, outpath)
             df.to_csv(save_path, index=False)
 
         return df
+    
+    def build_rates(self, save=False):
+        # baml index data
+        bml = join(self.base_url, self.RATES_BAML_DIR)
+        ust = join(self.base_url, self.RATES_UST_DIR)
+        if self._is_local:
+            cps = [join(bml, f) for f in listdir(bml) if isfile(join(bml, f))]
+            ups = [join(ust, f) for f in listdir(ust) if isfile(join(ust, f))]
+        else:
+            cps = [f for f in self._conn.ls(bml) if f.endswith('.csv')]
+            ups = [f for f in self._conn.ls(ust) if f.endswith('.csv')]
+        
+        paths = cps + ups
+        
+        # merge each file
+        p = paths[0]
+        if self._is_local:
+            df = pd.read_csv(p, index_col='DATE')
+        else:
+            with self._conn.open(p) as f:
+                df = pd.read_csv(f, index_col='DATE')
+        
+        for p in paths[1:]:
+            if self._is_local:
+                tmp = pd.read_csv(p, index_col='DATE')
+            else:
+                with self._conn.open(p) as f:
+                    tmp = pd.read_csv(f, index_col='DATE')
+            df = df.join(tmp)
+        
+        df = df.replace(to_replace='.', value=np.nan).dropna()
+        df = df.reset_index()
 
+        # save consolidated data
+        if save:
+            dtstr = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-')
+            outpath = 'rates_'+dtstr+str(uuid4())+'.csv'
+            save_path = join(self.base_url, self.RATES_OUTPUT_DIR, outpath)
+            df.to_csv(save_path, index=False)
+        return df
+    
+    def combine_txs_rates(self, txs_path, rates_path, save=False):
+        tx_url = join(self.base_url, self.DATA_OUTPUT_DIR, txs_path)
+        rates_url = join(self.base_url, self.RATES_OUTPUT_DIR, rates_path)
+        if self._is_local:
+            dftxs = pd.read_csv(tx_url, index_col='trans_dt')
+            dfrates = pd.read_csv(rates_url, index_col='DATE')
+        else:
+            with self._conn.open(tx_url) as f:
+                dftxs = pd.read_csv(f, index_col='trans_dt')
+            with self._conn.open(rates_url) as f:
+                dfrates = pd.read_csv(rates_url, index_col='trans_dt')
+        dftxs = dftxs.join(dfrates).dropna().reset_index()
+        dftxs = dftxs.rename(columns={'index': 'trans_dt'})
+        dftxs = dftxs[dftxs.debt_type_cd == 'S-NT'].drop(['debt_type_cd'],
+                                                         axis=1)
+        
+        # save consolidated data
+        if save:
+            dtstr = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-')
+            outpath = 'txs_rates_'+dtstr+str(uuid4())+'.csv'
+            save_path = join(self.base_url, self.DATA_OUTPUT_DIR, outpath)
+            dftxs.to_csv(save_path, index=False)
+        return dftxs
+    
+    def load_data(self, data_path):
+        data_url = join(self.base_url, self.DATA_OUTPUT_DIR, data_path)
+        if self._is_local:
+            cols = pd.read_csv(data_url, nrows=1).columns.values
+            cols = [c for c in cols if c not in self.INVALID_DATA_COLS]
+            df = pd.read_csv(data_url, usecols=cols, dtype=np.float64)
+        else:
+            with self._conn.open(data_url) as f:
+                cols = pd.read_csv(f, nrows=1).columns.values
+                cols = [c for c in cols if c not in self.INVALID_DATA_COLS]
+                df = pd.read_csv(f, usecols=cols, dtype=np.float64)
 
-if __name__ == '__main__':
-    # example usage for locally pulling and storing issuance meta info
-    ds = DataSelector(is_local=True)
-    ts = ds.fetch_tickers()
-    df = ds.fetch_issuance_meta(ts, save=True)
-    print(df.head())
+        # drop columns with all zeros
+        df = df.loc[:, (df != 0).any(axis=0)]
+        
+        # return with target last column
+        cols = [c for c in df.columns.values if c != 'close_yld']
+        cols.append('close_yld')
+        return df[cols]
+
+    def get_stats(self, df, save=False):
+        dfstats = pd.DataFrame({
+            'mean': df.mean(axis=0),
+            'std': df.std(axis=0)
+        })
+        if save:
+            save_path = join(self.base_url, self.STATS_OUTPUT_PATH)
+            dfstats.to_csv(save_path, index=False)
+        return dfstats
+    
+    def save_batch_paths(self):
+        batch_dir = join(self.base_url, self.BATCH_OUTPUT_DIR)
+        if self._is_local:
+            ps = [p for p in listdir(batch_dir) if isfile(join(batch_dir, p))]
+        else:
+            ps = self._conn.ls(batch_dir)
+            ps = [p.split('/')[-1] for p in ps if p.endswith('.csv')]
+
+        df = pd.DataFrame(ps)
+        df.to_csv(join(self.base_url, self.BATCH_LIST_PATH),
+                  index=False, header=False)
+        return df
+    
+    def batch_save(self, df, batch_cnt):
+        batches = np.array_split(df, batch_cnt)
+        for i, batch in enumerate(batches):
+            save_path = join(self.base_url, self.BATCH_OUTPUT_DIR, f'batch_{i}.csv')
+            batch.to_csv(save_path, index=False)
