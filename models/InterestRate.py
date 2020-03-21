@@ -1,8 +1,8 @@
 from os.path import join
 import pandas as pd
 from sqlalchemy import Column, Integer, Float, String, Date
-from DB import Base, db
-from utils import get_tickers
+from models.DB import Base, db
+from models.utils import get_tickers
 
 
 class InterestRate(Base):

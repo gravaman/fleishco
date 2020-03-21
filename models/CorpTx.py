@@ -1,6 +1,6 @@
 import pandas as pd
 from sqlalchemy import Column, Integer, Float, String, Date
-from DB import Base, db
+from models.DB import Base, db
 
 
 class CorpTx(Base):
