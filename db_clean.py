@@ -75,8 +75,26 @@ def del_invalid_scrty_ds():
     db.commit()
 
 
+def del_zero_cpn():
+    # remove zero coupon bonds
+    db.query(Corporate).filter(
+        Corporate.cpn_rt == 0
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
+def del_high_cpn():
+    # remove high coupon bonds
+    db.query(Corporate).filter(
+        Corporate.cpn_rt >= 15
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
 def clean_db():
     del_invalid_cpn_types()
     del_invalid_sub_prdct_types()
     del_invalid_debt_types()
     del_invalid_scrty_ds()
+    del_zero_cpn()
+    del_high_cpn()

@@ -2,8 +2,8 @@ from os.path import join
 import pandas as pd
 import numpy as np
 from sqlalchemy import Column, Integer, Float, String, Date
-from models.DB import Base, db
-from models.utils import get_tickers
+from DB import Base, db
+from utils import get_tickers
 
 
 FS_ITEMS = [
