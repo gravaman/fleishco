@@ -1,5 +1,11 @@
+from sqlalchemy.sql import select, update
+from sqlalchemy.sql.expression import func
 from models.Corporate import Corporate
-from models.DB import db
+from models.Entity import Entity
+from models.CorpTx import CorpTx  # noqa - needed for sqlalchemy table
+from models.Financial import Financial  # noqa - needed for sqlalchemy table
+from models.EquityPx import EquityPx  # noqa - needed for sqlalchemy table
+from models.DB import db, Base
 
 
 INVALID_SUB_PRDCT_TYPES = ['CHRC', 'ELN', 'AGCY']
@@ -43,58 +49,189 @@ VALID_SCRTY_DS = [
 ]
 
 
-def del_invalid_cpn_types():
+def del_invalid_cpn_types(table):
     # only vanilla fixed coupon bonds
-    db.query(Corporate).filter(
-        Corporate.cpn_type_cd != 'FXPV'
+    db.query(table).filter(
+        table.cpn_type_cd != 'FXPV'
     ).delete(synchronize_session=False)
     db.commit()
 
 
-def del_invalid_sub_prdct_types():
+def del_invalid_sub_prdct_types(table):
     # delete rows with invalid sub product type codes
-    db.query(Corporate).filter(
-        Corporate.sub_prdct_type.in_(INVALID_SUB_PRDCT_TYPES)
+    db.query(table).filter(
+        table.sub_prdct_type.in_(INVALID_SUB_PRDCT_TYPES)
     ).delete(synchronize_session=False)
     db.commit()
 
 
-def del_invalid_debt_types():
+def del_invalid_debt_types(table):
     # delete rows with invalid debt type codes
-    db.query(Corporate).filter(
-        Corporate.debt_type_cd.in_(INVALID_DEBT_TYPES)
+    db.query(table).filter(
+        table.debt_type_cd.in_(INVALID_DEBT_TYPES)
     ).delete(synchronize_session=False)
     db.commit()
 
 
-def del_invalid_scrty_ds():
+def del_invalid_scrty_ds(table):
     # only senior unsecured notes
-    db.query(Corporate).filter(
-        Corporate.scrty_ds.notin_(VALID_SCRTY_DS)
+    db.query(table).filter(
+        table.scrty_ds.notin_(VALID_SCRTY_DS)
     ).delete(synchronize_session=False)
     db.commit()
 
 
-def del_zero_cpn():
+def update_scrty_ds(table):
+    # standardize Senior Unsecured
+    db.query(table).update(
+        {table.scrty_ds: 'Senior Unsecured'},
+        synchronize_session=False)
+    db.commit()
+
+
+def update_corporate_fk():
+    # corporates matching 1st 6 digits of CUSIP-9 with entity CUSIP-6
+    s = select([
+        Corporate.id,
+        Entity.id,
+        Corporate.entity_id,
+        Corporate.cusip9,
+        Entity.cusip6]).where(
+            Corporate.entity_id.is_(None)
+        ).where(
+            func.left(Corporate.cusip9, 6) == Entity.cusip6
+        )
+    rows = db.execute(s).fetchall()
+
+    # update entity_id for CUSIP-6 matches
+    for cid, eid, _, cusip9, cusip6 in rows:
+        db.query(Corporate).filter(
+            Corporate.id == cid
+        ).update({
+            Corporate.entity_id: eid
+        }, synchronize_session=False)
+        db.commit()
+
+    # corporates matching company_symbol with entity ticker
+    s = select([
+        Corporate.id,
+        Entity.id,
+        Corporate.entity_id,
+        Corporate.company_symbol,
+        Entity.ticker]).where(
+            Corporate.entity_id.is_(None)
+        ).where(
+            Corporate.company_symbol == Entity.ticker
+        )
+    rows = db.execute(s).fetchall()
+
+    # update entity_id for ticker matches
+    for r in rows:
+        db.query(Corporate).filter(
+            Corporate.id == r[0]
+        ).update({
+            Corporate.entity_id: r[1]
+        }, synchronize_session=False)
+        db.commit()
+
+
+def update_financial_fk():
+    # financials matching ticker with entity ticker
+    financial = Base.metadata.tables['financial']
+    entity = Base.metadata.tables['entity']
+    s = update(financial).where(
+        financial.columns.entity_id.is_(None)
+    ).where(
+        financial.columns.ticker == entity.columns.ticker
+    ).values(entity_id=entity.columns.id)
+    db.execute(s)
+    db.commit()
+
+
+def update_equity_px_fk():
+    # equity pxs matching ticker with entity ticker
+    equity_px = Base.metadata.tables['equity_px']
+    entity = Base.metadata.tables['entity']
+    s = update(equity_px).where(
+        equity_px.columns.entity_id.is_(None)
+    ).where(
+        equity_px.columns.ticker == entity.columns.ticker
+    ).values(entity_id=entity.columns.id)
+    db.execute(s)
+    db.commit()
+
+
+def update_corp_tx_fk():
+    corp_tx = Base.metadata.tables['corp_tx']
+    corporate = Base.metadata.tables['corporate']
+
+    # corp_tx cusip_id matches corporate cusip9
+    s = update(corp_tx).where(
+        corp_tx.columns.corporate_id.is_(None)
+    ).where(
+        corp_tx.columns.cusip_id == corporate.columns.cusip9
+    ).values(corporate_id=corporate.columns.id)
+    db.execute(s)
+    db.commit()
+
+
+def del_zero_cpn(table):
     # remove zero coupon bonds
-    db.query(Corporate).filter(
-        Corporate.cpn_rt == 0
+    db.query(table).filter(
+        table.cpn_rt == 0
     ).delete(synchronize_session=False)
     db.commit()
 
 
-def del_high_cpn():
+def del_high_cpn(table):
     # remove high coupon bonds
-    db.query(Corporate).filter(
-        Corporate.cpn_rt >= 15
+    db.query(table).filter(
+        table.cpn_rt >= 15
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
+def del_no_entity(table):
+    db.query(table).filter(
+        table.entity_id.is_(None)
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
+def del_no_corporate(table):
+    db.query(table).filter(
+        table.corporate_id.is_(None)
     ).delete(synchronize_session=False)
     db.commit()
 
 
 def clean_db():
-    del_invalid_cpn_types()
-    del_invalid_sub_prdct_types()
-    del_invalid_debt_types()
-    del_invalid_scrty_ds()
-    del_zero_cpn()
-    del_high_cpn()
+    # corporate
+    del_invalid_cpn_types(Corporate)
+    del_invalid_sub_prdct_types(Corporate)
+    del_invalid_debt_types(Corporate)
+    del_invalid_scrty_ds(Corporate)
+    del_zero_cpn(Corporate)
+    del_high_cpn(Corporate)
+    update_scrty_ds(Corporate)
+    update_corporate_fk()
+    del_no_entity(Corporate)
+
+    # financial
+    update_financial_fk()
+
+    # equity_px
+    update_equity_px_fk()
+
+    # corp_tx
+    update_corp_tx_fk()
+    del_no_corporate(CorpTx)
+    del_invalid_debt_types(CorpTx)
+    del_invalid_scrty_ds(CorpTx)
+    del_zero_cpn(CorpTx)
+    del_high_cpn(CorpTx)
+    update_scrty_ds(CorpTx)
+
+
+if __name__ == '__main__':
+    clean_db()

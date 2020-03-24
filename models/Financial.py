@@ -1,9 +1,13 @@
 from os.path import join
 import pandas as pd
 import numpy as np
-from sqlalchemy import Column, Integer, Float, String, Date
-from DB import Base, db
-from utils import get_tickers
+from sqlalchemy import (
+    Column, Integer, Float, String,
+    Date, ForeignKey
+)
+from sqlalchemy.orm import relationship
+from models.DB import Base, db
+from models.utils import get_tickers
 
 
 FS_ITEMS = [
@@ -35,6 +39,8 @@ class Financial(Base):
     __tablename__ = 'financial'
     id = Column(Integer, primary_key=True)
     ticker = Column(String(10))
+    entity_id = Column(Integer, ForeignKey('entity.id'))
+    entity = relationship('Entity', back_populates='financials')
     earnings_release_date = Column(Date)
     filing_date = Column(Date)
     period = Column(String(6))
@@ -101,43 +107,16 @@ class Financial(Base):
     incometaxespaid = Column(Float)
     interestpaidnet = Column(Float)
 
-    """
     @classmethod
-    def insert_financials(cls, equities_dir):
-        tickers = get_tickers(equities_dir)
-        pxpaths = [join(equities_dir, f'{t}.csv') for t in tickers]
-        cmap = {
-            'Date': 'date', 'Volume': 'volume',
-            'Open': 'open', 'High': 'high', 'Low': 'low',
-            'Close': 'close', 'Adj Close': 'adj_close'
-        }
-        for ticker, pxpath in zip(tickers, pxpaths):
-            df = pd.read_csv(pxpath).dropna()
-            if df.shape[0] > 0:
-                df = df.rename(columns=cmap)
-                df['ticker'] = ticker
-                db.bulk_insert_mappings(cls, df.to_dict(orient='records'))
-                db.commit()
-    """
-    @classmethod
-    def insert_financials(cls, fin_dir):
+    def insert_financials(cls, fin_dir, nrows=None):
         tickers = get_tickers(fin_dir)
         fpaths = [join(fin_dir, f'{t}.csv') for t in tickers]
         for ticker, fin_path in zip(tickers, fpaths):
-            df = pd.read_csv(fin_path).dropna(subset=['earnings_release_date',
-                                                      'filing_date'])
+            df = pd.read_csv(fin_path, nrows=nrows).dropna(
+                subset=['earnings_release_date',
+                        'filing_date'])
             if df.shape[0] > 0:
                 df = df.replace(to_replace={np.nan: None})
                 df['ticker'] = ticker
                 db.bulk_insert_mappings(cls, df.to_dict(orient='records'))
                 db.commit()
-
-
-if __name__ == '__main__':
-    # create table
-    if False:
-        Base.metadata.create_all()
-
-    # insert data
-    if False:
-        Financial.insert_financials('data/financials')
