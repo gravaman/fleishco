@@ -2,6 +2,7 @@ from datetime import timedelta
 import pandas as pd
 import numpy as np
 from sqlalchemy import and_
+from sqlalchemy.sql import func
 from models.Corporate import Corporate  # noqa - needed for sqlalchemy table
 from models.Entity import Entity  # noqa - needed for sqlalchemy table
 from models.CorpTx import CorpTx  # noqa - needed for sqlalchemy table
@@ -81,6 +82,7 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
                   Financial.earnings_release_date.desc()
                   ) \
         .distinct(Financial.ticker, CorpTx.trans_dt) \
+        .order_by(func.random()) \
         .limit(sample_count)
 
     samples = db.execute(s).fetchall()
