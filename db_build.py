@@ -4,7 +4,20 @@ from models.Corporate import Corporate
 from models.CorpTx import CorpTx
 from models.Financial import Financial
 from models.EquityPx import EquityPx
-from models.InterestRate import InterestRate
+from models.InterestRate import (
+    InterestRate,
+    BamlAAASYTW,
+    BamlAASYTW,
+    BamlASYTW,
+    BamlBBBSYTW,
+    BamlBBSYTW,
+    BamlBSYTW,
+    BamlCSYTW,
+    Baml13YSTW,
+    Baml35YSTW,
+    Baml57YSTW,
+    Baml710YSTW
+)
 
 
 DATA_SOURCES = dict(
@@ -12,7 +25,19 @@ DATA_SOURCES = dict(
     entity_tickers='data/ciks/companies.csv',
     corporate='data/bonds/master_file.csv',
     financial='data/financials',
-    interest_rate='data/rates/baml',
+    interest_rate=[
+        (BamlAAASYTW, 'baml_aaa_sytw', 'data/rates/baml/BAMLC0A1CAAASYTW.csv'),
+        (BamlAASYTW, 'baml_aa_sytw', 'data/rates/baml/BAMLC0A2CAASYTW.csv'),
+        (BamlASYTW, 'baml_a_sytw', 'data/rates/baml/BAMLC0A3CASYTW.csv'),
+        (BamlBBBSYTW, 'baml_bbb_sytw', 'data/rates/baml/BAMLC0A4CBBBSYTW.csv'),
+        (BamlBBSYTW, 'baml_bb_sytw', 'data/rates/baml/BAMLH0A1HYBBSYTW.csv'),
+        (BamlBSYTW, 'baml_b_sytw', 'data/rates/baml/BAMLH0A2HYBSYTW.csv'),
+        (BamlCSYTW, 'baml_c_sytw', 'data/rates/baml/BAMLH0A3HYCSYTW.csv'),
+        (Baml13YSTW, 'baml_13_sytw', 'data/rates/baml/BAMLC1A0C13YSYTW.csv'),
+        (Baml35YSTW, 'baml_35_sytw', 'data/rates/baml/BAMLC2A0C35YSYTW.csv'),
+        (Baml57YSTW, 'baml_57_sytw', 'data/rates/baml/BAMLC3A0C57YSYTW.csv'),
+        (Baml710YSTW, 'baml_710_sytw', 'data/rates/baml/BAMLC4A0C710YSYTW.csv')
+    ],
     equity_px='data/equities',
     corp_tx='data/bonds/clean_bond_close_pxs.csv'
 )
@@ -45,6 +70,8 @@ def insert_data(nrows=None):
                                nrows=nrows)
     InterestRate.insert_interest_rates(DATA_SOURCES['interest_rate'],
                                        nrows=nrows)
+    for cls, ticker, rates_path in DATA_SOURCES['interest_rate']:
+        cls.insert_interest_rates(ticker, rates_path, nrows)
 
 
 build(case='test')
