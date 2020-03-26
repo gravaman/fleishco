@@ -28,14 +28,15 @@ class CorpTx(Base):
     @classmethod
     def insert_corp_txs(cls, txs_path, nrows=None):
         df = pd.read_csv(txs_path, nrows=nrows).dropna()
-        steps = df.shape[0] // 1000
+        step_size = min(nrows, 1000)
+        steps = df.shape[0] // step_size
         for step in range(steps):
-            idx = step*1000
+            idx = step*step_size
             if step == steps:
                 dftxs = df.iloc[idx:]
                 db.bulk_insert_mappings(cls, dftxs.to_dict(orient='records'))
                 db.commit()
             else:
-                dftxs = df.iloc[idx:idx+1000]
+                dftxs = df.iloc[idx:idx+step_size]
                 db.bulk_insert_mappings(cls, dftxs.to_dict(orient='records'))
                 db.commit()

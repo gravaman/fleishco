@@ -8,6 +8,7 @@ from models.Entity import Entity  # noqa - needed for sqlalchemy table
 from models.CorpTx import CorpTx  # noqa - needed for sqlalchemy table
 from models.Financial import Financial, FS_ITEMS  # noqa - needed for sqlalchemy table
 from models.EquityPx import EquityPx  # noqa - needed for sqlalchemy table
+from models.InterestRate import InterestRate
 from models.DB import db
 
 
@@ -65,32 +66,45 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
     # query corporate transactions to generate terms, equity price, and
     # last reported financials within given day range
     s = db.query(CorpTx.company_symbol, CorpTx.trans_dt, CorpTx.mtrty_dt,
-                 EquityPx.adj_close, CorpTx.close_yld, Financial) \
+                 EquityPx.adj_close, CorpTx.close_yld, Financial,
+                 InterestRate.BAMLC0A1CAAASYTW,
+                 InterestRate.BAMLC0A2CAASYTW,
+                 InterestRate.BAMLC0A3CASYTW,
+                 InterestRate.BAMLC0A4CBBBSYTW,
+                 InterestRate.BAMLH0A1HYBBSYTW,
+                 InterestRate.BAMLH0A2HYBSYTW,
+                 InterestRate.BAMLH0A3HYCSYTW,
+                 InterestRate.BAMLC1A0C13YSYTW,
+                 InterestRate.BAMLC2A0C35YSYTW,
+                 InterestRate.BAMLC3A0C57YSYTW,
+                 InterestRate.BAMLC4A0C710YSYTW,
+                 InterestRate.BAMLC7A0C1015YSYTW,
+                 InterestRate.BAMLC8A0C15PYSYTW) \
         .select_from(CorpTx) \
         .join(EquityPx,
               and_(CorpTx.company_symbol == EquityPx.ticker,
                    CorpTx.trans_dt == EquityPx.date)) \
+        .join(InterestRate, CorpTx.trans_dt == InterestRate.date) \
         .join(Financial, CorpTx.company_symbol == Financial.ticker) \
         .filter(
             and_(
                 CorpTx.trans_dt-Financial.earnings_release_date <= day_window,
-                CorpTx.trans_dt-Financial.earnings_release_date > 0
-            )
-        ) \
+                CorpTx.trans_dt-Financial.earnings_release_date > 0)) \
         .order_by(Financial.ticker,
                   CorpTx.trans_dt.desc(),
-                  Financial.earnings_release_date.desc()
-                  ) \
+                  Financial.earnings_release_date.desc()) \
         .distinct(Financial.ticker, CorpTx.trans_dt) \
         .order_by(func.random()) \
         .limit(sample_count)
 
     samples = db.execute(s).fetchall()
-
     # convert to df
     colnames = ['company_symbol', 'trans_dt', 'mtrty_dt',
                 'adj_close', 'close_yld']
     colnames += Financial.__table__.columns.keys()
+    rate_cols = InterestRate.__table__.columns.keys()
+    rate_cols = [c for c in rate_cols if c not in ['id', 'date']]
+    colnames += [c for c in rate_cols if c not in ['id', 'date']]
     df = pd.DataFrame(samples, columns=colnames)
 
     # calculate days to maturity
@@ -158,7 +172,8 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
     df['mkt_cap'] = df.adj_close * df.sharesoutstandingendofperiod
     df['ev'] = df.mkt_cap + df.totaldebt - df.cash \
         - df.shortterminvestments - df.longterminvestments
-    xcol_mask = df.columns.values != 'close_yld'
+    xcol_mask = [c for c in df.columns.values
+                 if c not in rate_cols + ['close_yld', 'days_to_mtrty']]
     df.loc[:, xcol_mask] = df.loc[:, xcol_mask].div(df.ev, axis=0)
     if standardize:
         df = (df - df.mean(axis=0)) / df.std(axis=0)
@@ -185,7 +200,15 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
     ]
     df = df.drop(labels=DROP_COLS, axis=1).dropna(axis=1, how='all')
 
+    # order cols into financials, interest rates, instrument metrics
+    outcols = [c for c in df.columns.values if c not in rate_cols +
+               ['days_to_mtrty', 'close_yld']]
+    outcols += rate_cols + ['days_to_mtrty']
+
     # split into x, y, column names
-    outcols = [c for c in df.columns.values if c != 'close_yld']
+    # outcols = [c for c in df.columns.values if c != 'close_yld']
     x, y = df[outcols].values, df.close_yld.values
     return x, y, outcols
+
+
+build_feature_data()
