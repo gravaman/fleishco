@@ -5,7 +5,6 @@ from sqlalchemy import (
     Column, Integer, Float, String,
     Date, ForeignKey
 )
-from sqlalchemy.orm import relationship
 from models.DB import Base, db
 from models.utils import get_tickers
 
@@ -39,8 +38,9 @@ class Financial(Base):
     __tablename__ = 'financial'
     id = Column(Integer, primary_key=True)
     ticker = Column(String(10))
-    entity_id = Column(Integer, ForeignKey('entity.id'))
-    entity = relationship('Entity', back_populates='financials')
+    entity_id = Column(Integer,
+                       ForeignKey('entity.id'),
+                       index=True)
     earnings_release_date = Column(Date)
     filing_date = Column(Date)
     period = Column(String(6))

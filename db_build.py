@@ -45,4 +45,4 @@ def insert_data(nrows=None):
     InterestRate.insert_interest_rates(DATA_SOURCES['interest_rate'])
 
 
-build(case='test')
+build(case='prod')

@@ -29,9 +29,12 @@ class Entity(Base):
     ticker = Column(String(10))
     name = Column(String(120))
     sic_mtitle = Column(String(80))
-    corporates = relationship('Corporate', back_populates='entity')
-    financials = relationship('Financial', back_populates='entity')
-    equity_pxs = relationship('EquityPx', back_populates='entity')
+    corporates = relationship('Corporate',
+                              cascade='all, delete-orphan')
+    financials = relationship('Financial',
+                              cascade='all, delete-orphan')
+    equity_pxs = relationship('EquityPx',
+                              cascade='all, delete-orphan')
 
     @classmethod
     def insert_entities(cls, entity_path, tickers_path):

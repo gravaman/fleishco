@@ -51,9 +51,9 @@ VALID_SCRTY_DS = [
 
 def del_invalid_cpn_types(table):
     # only vanilla fixed coupon bonds
-    db.query(table).filter(
-        table.cpn_type_cd != 'FXPV'
-    ).delete(synchronize_session=False)
+    db.query(table) \
+        .filter(table.cpn_type_cd != 'FXPV') \
+        .delete(synchronize_session=False)
     db.commit()
 
 

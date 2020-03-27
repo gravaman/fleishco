@@ -30,9 +30,11 @@ class Corporate(Base):
     id = Column(Integer, primary_key=True)
     finra_symbol = Column(String(14), unique=True)
     cusip9 = Column(String(9), unique=True)
-    entity_id = Column(Integer, ForeignKey('entity.id'))
-    entity = relationship('Entity', back_populates='corporates')
-    corp_txs = relationship('CorpTx', back_populates='corporate')
+    entity_id = Column(Integer,
+                       ForeignKey('entity.id'),
+                       index=True)
+    corp_txs = relationship('CorpTx',
+                            cascade='all, delete-orphan')
     bsym_id = Column(String(12), unique=True)
     company_symbol = Column(String(8))
     sub_prdct_type = Column(String(10))
@@ -40,7 +42,7 @@ class Corporate(Base):
     issuer_nm = Column(String(80))
     scrty_ds = Column(String(80))
     cpn_rt = Column(Float)
-    cpn_type_cd = Column(String(10))
+    cpn_type_cd = Column(String(10), index=True)
     trd_rpt_efctv_dt = Column(Date)
     mtrty_dt = Column(Date)
     ind_144a = Column(Boolean)

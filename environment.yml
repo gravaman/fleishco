@@ -28,6 +28,7 @@ dependencies:
         - cudatoolkit=10.1
         - tensorboard
         - sqlalchemy
+        - xlwings
         - pip:
                 - pprofile
                 - jsons

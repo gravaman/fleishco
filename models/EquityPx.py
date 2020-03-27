@@ -4,7 +4,6 @@ from sqlalchemy import (
     Column, Integer, BigInteger,
     Float, String, Date, ForeignKey
 )
-from sqlalchemy.orm import relationship
 from models.DB import Base, db
 from models.utils import get_tickers
 
@@ -13,8 +12,9 @@ class EquityPx(Base):
     __tablename__ = 'equity_px'
     id = Column(Integer, primary_key=True)
     ticker = Column(String(10))
-    entity_id = Column(Integer, ForeignKey('entity.id'))
-    entity = relationship('Entity', back_populates='equity_pxs')
+    entity_id = Column(Integer,
+                       ForeignKey('entity.id'),
+                       index=True)
     date = Column(Date)
     volume = Column(BigInteger)
     open = Column(Float)

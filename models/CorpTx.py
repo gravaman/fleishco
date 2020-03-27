@@ -3,7 +3,6 @@ from sqlalchemy import (
     Column, Integer, Float, String,
     Date, ForeignKey
 )
-from sqlalchemy.orm import relationship
 from models.DB import Base, db
 
 
@@ -13,8 +12,9 @@ class CorpTx(Base):
     cusip_id = Column(String(9))
     bond_sym_id = Column(String(14))
     company_symbol = Column(String(20))
-    corporate_id = Column(Integer, ForeignKey('corporate.id'))
-    corporate = relationship('Corporate', back_populates='corp_txs')
+    corporate_id = Column(Integer,
+                          ForeignKey('corporate.id'),
+                          index=True)
     issuer_nm = Column(String(80))
     debt_type_cd = Column(String(8))
     scrty_ds = Column(String(80))
@@ -28,7 +28,10 @@ class CorpTx(Base):
     @classmethod
     def insert_corp_txs(cls, txs_path, nrows=None):
         df = pd.read_csv(txs_path, nrows=nrows).dropna()
-        step_size = min(nrows, 1000)
+        if nrows is None:
+            step_size = 100000
+        else:
+            step_size = min(nrows, 100000)
         steps = df.shape[0] // step_size
         for step in range(steps):
             idx = step*step_size
