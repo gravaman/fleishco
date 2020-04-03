@@ -11,7 +11,7 @@ class InterestRate(Base):
     """
     __tablename__ = 'interest_rate'
     id = Column(Integer, primary_key=True)
-    date = Column(Date)
+    date = Column(Date, index=True)
     BAMLC0A1CAAASYTW = Column(Float)
     BAMLC0A2CAASYTW = Column(Float)
     BAMLC0A3CASYTW = Column(Float)

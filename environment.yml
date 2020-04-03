@@ -24,6 +24,7 @@ dependencies:
         - awscli
         - s3fs
         - pytorch
+        - torchtext
         - torchvision
         - cudatoolkit=10.1
         - tensorboard
@@ -41,3 +42,4 @@ dependencies:
                 - absl-py
                 - grpcio
                 - QuantLib
+                - sentencepiece

@@ -11,7 +11,8 @@ class CorpTx(Base):
     id = Column(Integer, primary_key=True)
     cusip_id = Column(String(9))
     bond_sym_id = Column(String(14))
-    company_symbol = Column(String(20))
+    company_symbol = Column(String(20),
+                            index=True)
     corporate_id = Column(Integer,
                           ForeignKey('corporate.id'),
                           index=True)
@@ -19,9 +20,9 @@ class CorpTx(Base):
     debt_type_cd = Column(String(8))
     scrty_ds = Column(String(80))
     cpn_rt = Column(Float)
-    close_pr = Column(Float)
-    close_yld = Column(Float)
-    trans_dt = Column(Date)
+    close_pr = Column(Float, index=True)
+    close_yld = Column(Float, index=True)
+    trans_dt = Column(Date, index=True)
     trd_rpt_efctv_dt = Column(Date)
     mtrty_dt = Column(Date)
 

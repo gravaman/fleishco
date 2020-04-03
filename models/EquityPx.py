@@ -11,11 +11,11 @@ from models.utils import get_tickers
 class EquityPx(Base):
     __tablename__ = 'equity_px'
     id = Column(Integer, primary_key=True)
-    ticker = Column(String(10))
+    ticker = Column(String(10), index=True)
     entity_id = Column(Integer,
                        ForeignKey('entity.id'),
                        index=True)
-    date = Column(Date)
+    date = Column(Date, index=True)
     volume = Column(BigInteger)
     open = Column(Float)
     high = Column(Float)

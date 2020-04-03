@@ -37,11 +37,11 @@ FS_ITEMS = [
 class Financial(Base):
     __tablename__ = 'financial'
     id = Column(Integer, primary_key=True)
-    ticker = Column(String(10))
+    ticker = Column(String(10), index=True)
     entity_id = Column(Integer,
                        ForeignKey('entity.id'),
                        index=True)
-    earnings_release_date = Column(Date)
+    earnings_release_date = Column(Date, index=True)
     filing_date = Column(Date)
     period = Column(String(6))
     period_start = Column(Date)

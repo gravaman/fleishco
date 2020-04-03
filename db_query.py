@@ -37,7 +37,8 @@ def find_sample(ticker, trans_date, fin_count=8):
     s = db.query(Financial.ticker, CorpTx.trans_dt,
                  Financial.earnings_release_date,
                  Financial.revenueadjusted) \
-        .filter(CorpTx.trans_dt == CorpTx.trans_dt) \
+        .filter(and_(CorpTx.trans_dt == CorpTx.trans_dt,
+                     CorpTx.close_pr <= 100)) \
         .filter(EquityPx.date == CorpTx.trans_dt) \
         .filter(CorpTx.company_symbol == EquityPx.ticker) \
         .filter(Financial.ticker == EquityPx.ticker) \
@@ -121,6 +122,21 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
                       columns=df.columns.values,
                       dtype=np.float64).fillna(0)
 
+    # reduce complexity of rating based interest rate cols
+    df.loc[:, 'BAMLH0A3HYCSYTW'] -= df.BAMLH0A2HYBSYTW
+    df.loc[:, 'BAMLH0A2HYBSYTW'] -= df.BAMLH0A1HYBBSYTW
+    df.loc[:, 'BAMLH0A1HYBBSYTW'] -= df.BAMLC0A4CBBBSYTW
+    df.loc[:, 'BAMLC0A4CBBBSYTW'] -= df.BAMLC0A3CASYTW
+    df.loc[:, 'BAMLC0A3CASYTW'] -= df.BAMLC0A2CAASYTW
+    df.loc[:, 'BAMLC0A2CAASYTW'] -= df.BAMLC0A1CAAASYTW
+    
+    # reduce complexity of duration based interest rate cols
+    df.loc[:, 'BAMLC8A0C15PYSYTW'] -= df.BAMLC7A0C1015YSYTW
+    df.loc[:, 'BAMLC7A0C1015YSYTW'] -= df.BAMLC4A0C710YSYTW
+    df.loc[:, 'BAMLC4A0C710YSYTW'] -= df.BAMLC3A0C57YSYTW
+    df.loc[:, 'BAMLC3A0C57YSYTW'] -= df.BAMLC2A0C35YSYTW
+    df.loc[:, 'BAMLC2A0C35YSYTW'] -= df.BAMLC1A0C13YSYTW
+    
     # reduce complexity by adding line item complements
     # residual opex
     df['other_opex'] = df.operatingexpenses - df.sgaexpense \
@@ -209,6 +225,3 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
     # outcols = [c for c in df.columns.values if c != 'close_yld']
     x, y = df[outcols].values, df.close_yld.values
     return x, y, outcols
-
-
-build_feature_data()
