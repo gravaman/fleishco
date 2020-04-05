@@ -1,24 +1,34 @@
-from os import listdir
-from os.path import join, isfile, splitext, basename
-import logging
+from os.path import splitext, basename
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
+from utils import list_files
 
 
 class StockDataset(Dataset):
-    def __init__(self, root_dir, nrows=None, index_col=None,
+    def __init__(self, root_dir, idxs=None, index_col=None,
                  T_back=30, T_fwd=10):
         # init params
-        self.ticker_list = [join(root_dir, p) for p in listdir(root_dir)
-                            if isfile(join(root_dir, p))]
+        self.ticker_list = list_files(root_dir)
+        if idxs is not None:
+            self.ticker_list = list(np.array(self.ticker_list)[idxs])
+
         self.tickers = [splitext(basename(p))[0] for p in self.ticker_list]
-        self.nrows = nrows
         self.index_col = index_col
         self.T_back = T_back
         self.T_fwd = T_fwd
         self.T = T_back+T_fwd
+
+    def size(self):
+        """
+        shape of X and y
+        """
+        df = pd.read_csv(self.ticker_list[0], nrows=10,
+                         index_col=self.index_col)
+        N = self.__len__()
+        D = df.shape[1]-1
+        return (N, self.T_back, D), (N, self.T_fwd)
 
     def __len__(self):
         return len(self.ticker_list)
@@ -33,7 +43,6 @@ class StockDataset(Dataset):
         # load data
         data = pd.read_csv(
             file_path,
-            nrows=self.nrows,
             index_col=self.index_col
         ).dropna().sort_values(
             ['Date'],
@@ -55,49 +64,14 @@ class StockDataset(Dataset):
 
 
 class StockBatch:
-    def __init__(self, batch, mbatch_size=50):
+    mbatch_size = 50  # samples per batch
+
+    def __init__(self, batch):
         self.X, self.y = [torch.cat(b, dim=0) for b in zip(*batch)]
-        idxs = np.random.choice(len(self.X), mbatch_size)
+        idxs = np.random.choice(len(self.X), self.mbatch_size)
         self.X, self.y = self.X[idxs], self.y[idxs]
 
     def pin_memory(self):
         self.X = self.X.pin_memory()
         self.y = self.y.pin_memory()
         return self
-
-
-def setup_logger(logger_name):
-    # create and return logger with given name
-    logger = logging.getLogger(logger_name)
-    logger.setLevel(logging.DEBUG)
-
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s '
-                                  '| %(message)s')
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
-    return logger
-
-
-def main():
-    logger = setup_logger('lstm')
-    logger.info('Loading Stock Data Loader Tests')
-
-    ticker_dir = 'data/equities'
-    pmem = True if torch.cuda().is_available() else False
-    stock_dataset = StockDataset(ticker_dir, index_col='Date')
-    data_loader = DataLoader(stock_dataset, batch_size=4,
-                             shuffle=True, pin_memory=pmem,
-                             num_workers=4, collate_fn=StockBatch)
-
-    for i, sample in enumerate(data_loader):
-        logger.info(f'batch idx: {i} X size: {sample.X.size()}'
-                    f'y size: {sample.y.size()}')
-
-    logger.info('Finished Testing Stock Data Loader')
-
-
-if __name__ == '__main__':
-    main()
