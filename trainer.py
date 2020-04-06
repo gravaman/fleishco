@@ -5,6 +5,7 @@ import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader
 from StockDataset import StockDataset, StockBatch
+from RNN import RNN
 from LSTM import LSTM
 from utils import list_files
 
@@ -15,6 +16,7 @@ from utils import list_files
 # visualizations
 # normalize dataset
 # pull data from postgres
+# Transcoder
 ##############################
 
 def setup_logger(name, level='DEBUG', fmt=None):
@@ -82,8 +84,8 @@ def test_dataloader(loader, logger_name):
     logger.info('dataloader test complete')
 
 
-def train(model, loader, optimizer, loss_fn, device, grad_norm_max=0.5,
-          log_rate=0.25, logger_name='lstm'):
+def train(model, loader, optimizer, loss_fn, device, logger_name,
+          grad_norm_max=0.5, log_rate=0.25):
     logger = logging.getLogger(logger_name)
     model.train()
     total_loss = 0.0
@@ -127,9 +129,13 @@ def evaluate(model, loader, loss_fn, device):
 
 
 def main():
+    # available types: rnn, lstm
+    model_type = 'rnn'
+
+    assert model_type in ['rnn', 'lstm'], f'unknown model_type: {model_type}'
+
     # logger setup
-    logger_name = 'lstm'
-    logger = setup_logger(logger_name)
+    logger = setup_logger(model_type)
 
     # device setup
     if torch.cuda.is_available():
@@ -157,7 +163,10 @@ def main():
     H = 10  # number of hidden state features
     D_out = train_yshape[1]  # number of output features
 
-    model = LSTM(D_in, H, D_out, device=device).to(device)
+    if model_type == 'rnn':
+        model = RNN(D_in, H, D_out, device=device).to(device)
+    elif model_type == 'lstm':
+        model = LSTM(D_in, H, D_out, device=device).to(device)
 
     # optimizer setup
     optimize_type = 'sgd'
@@ -182,8 +191,8 @@ def main():
     eval_loss_fn = nn.MSELoss(reduction='sum')
     for epoch in range(1, epochs+1):
         epoch_start_time = time.time()
-        train(model, train_loader, device=device, optimizer=optimizer,
-              loss_fn=train_loss_fn)
+        train(model, train_loader, logger_name=model_type, device=device,
+              optimizer=optimizer, loss_fn=train_loss_fn)
         val_loss = evaluate(model, val_loader,
                             loss_fn=eval_loss_fn, device=device)
         epoch_time = time.time()-epoch_start_time
