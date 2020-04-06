@@ -12,11 +12,10 @@ from utils import list_files
 
 ##############################
 # TODO
+# build transcoder
+# pull data from postgres
 # add CLI parser
 # visualizations
-# normalize dataset
-# pull data from postgres
-# Transcoder
 ##############################
 
 def setup_logger(name, level='DEBUG', fmt=None):
@@ -63,10 +62,17 @@ def setup_dataloaders(ticker_dir, tickers_per_batch=4, mbatch_size=50,
     # data loaders
     shapes, loaders = [], []
     StockBatch.mbatch_size = mbatch_size
-    for ticker_idxs in [train_idxs, val_idxs, test_idxs]:
+    for i, ticker_idxs in enumerate([train_idxs, val_idxs, test_idxs]):
         dataset = StockDataset(ticker_dir,
                                idxs=ticker_idxs,
                                index_col='Date')
+        if i == 0:
+            # get stats for training data
+            mu, std = dataset.get_stats()
+        else:
+            # set stats for validation and testing data based on training
+            dataset.mu, dataset.std = mu, std
+
         shapes.append(dataset.size())
         loaders.append(DataLoader(dataset, batch_size=tickers_per_batch,
                                   shuffle=True, pin_memory=pmem,

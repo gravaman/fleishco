@@ -8,7 +8,7 @@ from utils import list_files
 
 class StockDataset(Dataset):
     def __init__(self, root_dir, idxs=None, index_col=None,
-                 T_back=30, T_fwd=10):
+                 T_back=30, T_fwd=10, mu=None, std=None):
         # init params
         self.ticker_list = list_files(root_dir)
         if idxs is not None:
@@ -19,6 +19,8 @@ class StockDataset(Dataset):
         self.T_back = T_back
         self.T_fwd = T_fwd
         self.T = T_back+T_fwd
+        self.mu = mu
+        self.std = std
 
     def size(self):
         """
@@ -29,6 +31,57 @@ class StockDataset(Dataset):
         N = self.__len__()
         D = df.shape[1]-1
         return (N, self.T_back, D), (N, self.T_fwd)
+
+    def get_stats(self):
+        """
+        Calculates the mean and std of the dataset excluding
+        the forward period. Causes data to be normalized upon
+        future retrieval by dataloader.
+
+        return
+        N (scalar): number of samples
+        mu (D,): mean of data features (includes target)
+        std (D,): std of data features (includes target)
+        """
+        # mu: sum features/total samples
+        xsize, _ = self.size()
+        N, totals = 0, np.zeros(xsize[2]+1)
+        for ticker_path in self.ticker_list:
+            data = pd.read_csv(
+                ticker_path,
+                index_col=self.index_col
+            ).dropna().sort_values(
+                ['Date'],
+                ascending=[True]
+            ).values.astype('float')
+
+            # sum except for last T_fwd records
+            data = data[:-self.T_fwd, :]
+            N += data.shape[0]
+            totals += data.sum(axis=0)
+        mu = totals/N
+
+        # std sqrt SS/N
+        ss = np.zeros(mu.shape)
+        for ticker_path in self.ticker_list:
+            data = pd.read_csv(
+                ticker_path,
+                index_col=self.index_col
+            ).dropna().sort_values(
+                ['Date'],
+                ascending=[True]
+            ).values.astype('float')
+
+            # sum squares except last T_fwd records
+            data = data[:-self.T_fwd, :]
+            ss += ((data-mu)**2).sum(axis=0)
+        std = (ss/N)**0.5
+
+        # store for item retrieval
+        self.mu = mu
+        self.std = std
+
+        return mu, std
 
     def __len__(self):
         return len(self.ticker_list)
@@ -48,6 +101,10 @@ class StockDataset(Dataset):
             ['Date'],
             ascending=[True]
         ).values.astype('float')
+
+        # conditionally standardize
+        if self.mu is not None and self.std is not None:
+            data = (data - self.mu)/self.std
 
         # convert data into time series (truncate beginning)
         # data: (TS_CNT, D_in, T)
