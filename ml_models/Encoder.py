@@ -5,7 +5,7 @@ from PFF import PFF
 
 class Encoder(nn.Module):
     """
-    Multi-head attention encoder based on 'Attention is All You Need' paper
+    Multi-head attention encoder based on 'Attention is All You Need' paper.
     Attention output is summed with the input residual and then normalized.
     Resultant output is passed through a position-wise FFN.
     """
@@ -13,9 +13,9 @@ class Encoder(nn.Module):
                  dropout=0.5, device=None):
         super(Encoder, self).__init__()
 
-        self.MHA = MHA(D_in, Q, V, H, local_attn_size=local_attn_size,
-                       fwd_attn=fwd_attn, device=device)
-        self.PFF = PFF(D_in)
+        self.attn = MHA(D_in, Q, V, H, local_attn_size=local_attn_size,
+                        fwd_attn=fwd_attn, device=device)
+        self.ffwd = PFF(D_in)
         self.dropout = nn.Dropout(p=dropout)
         self.lnorm1 = nn.LayerNorm(D_in)
         self.lnorm2 = nn.LayerNorm(D_in)
@@ -30,13 +30,13 @@ class Encoder(nn.Module):
         """
         # multi-head attention segment
         R = X
-        X = self.MHA(X)
+        X = self.attn(q_in=X, k_in=X, v_in=X)
         X = self.dropout(X)
         X = self.lnorm1(R+X)
 
         # position-wise feed-forward segment
         R = X
-        X = self.PFF(X)
+        X = self.ffwd(X)
         X = self.dropout(X)
         X = self.lnorm2(R+X)
         return X
