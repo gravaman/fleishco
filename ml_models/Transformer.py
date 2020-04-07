@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 from Encoder import Encoder
 from Decoder import Decoder
@@ -49,4 +50,18 @@ class Transcoder(nn.Module):
         return
         y_pred (batch_size, T, D_in): output prediction
         """
-        pass
+        # embed input
+        X = self.embed_layer(X)
+
+        # pass thru encoding layers
+        for layer in self.encoding_layers:
+            X = layer(X)
+
+        # pass thru decoding layers
+        for layer in self.decoding_layers:
+            X = layer(X)
+
+        # generate output
+        X = torch.sigmoid(self.out_layer(X))
+
+        return X
