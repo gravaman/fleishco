@@ -7,16 +7,20 @@ from torch.utils.data import DataLoader
 from ml_models.StockDataset import StockDataset, StockBatch
 from ml_models.RNN import RNN
 from ml_models.LSTM import LSTM
+from ml_models.Transformer import Transformer
 from ml_models.utils import list_files
 
 
 ##############################
 # TODO
-# build transcoder
 # pull data from postgres
 # add CLI parser
 # visualizations
 ##############################
+
+# constants
+MODEL_TYPES = ['rnn', 'lstm', 'transformer']
+
 
 def setup_logger(name, level='DEBUG', fmt=None):
     level = level.upper()
@@ -135,10 +139,10 @@ def evaluate(model, loader, loss_fn, device):
 
 
 def main():
-    # available types: rnn, lstm
-    model_type = 'rnn'
+    # available types: rnn, lstm, tranformer
+    model_type = 'transformer'
 
-    assert model_type in ['rnn', 'lstm'], f'unknown model_type: {model_type}'
+    assert model_type in MODEL_TYPES, f'unknown model_type: {model_type}'
 
     # logger setup
     logger = setup_logger(model_type)
@@ -166,13 +170,25 @@ def main():
     # model setup
     train_xshape, train_yshape = datashapes[0]
     D_in = train_xshape[2]  # number of input features
-    H = 10  # number of hidden state features
     D_out = train_yshape[1]  # number of output features
-
-    if model_type == 'rnn':
-        model = RNN(D_in, H, D_out, device=device).to(device)
+    if model_type == 'transformer':
+        D_embed = 512  # embedding dimension
+        Q = train_xshape[1]  # query matrix dimesion (T)
+        V = train_xshape[1]  # value matrix dimension (T)
+        H = 4  # number of heads
+        N = 4  # number of encoder and decoder stacks
+        attn_size = None  # local attention mask size
+        dropout = 0.3  # dropout pct
+        P = 4  # periodicity of input data
+        model = Transformer(D_in, D_embed, D_out, Q, V, H, N,
+                            local_attn_size=attn_size, dropout=dropout,
+                            P=P, device=device).to(device)
     elif model_type == 'lstm':
+        H = 10  # number of hidden state features
         model = LSTM(D_in, H, D_out, device=device).to(device)
+    elif model_type == 'rnn':
+        H = 10  # number of hidden state features
+        model = RNN(D_in, H, D_out, device=device).to(device)
 
     # optimizer setup
     optimize_type = 'sgd'

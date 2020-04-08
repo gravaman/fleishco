@@ -1,6 +1,6 @@
 import torch.nn as nn
-from MHA import MHA
-from PFF import PFF
+from ml_models.MHA import MHA
+from ml_models.PFF import PFF
 
 
 class Encoder(nn.Module):
@@ -9,24 +9,24 @@ class Encoder(nn.Module):
     Attention output is summed with the input residual and then normalized.
     Resultant output is passed through a position-wise FFN.
     """
-    def __init__(self, D_in, Q, V, H, local_attn_size=None, fwd_attn=False,
+    def __init__(self, D_embed, Q, V, H, local_attn_size=None, fwd_attn=False,
                  dropout=0.5, device=None):
         super(Encoder, self).__init__()
 
-        self.attn = MHA(D_in, Q, V, H, local_attn_size=local_attn_size,
+        self.attn = MHA(D_embed, Q, V, H, local_attn_size=local_attn_size,
                         fwd_attn=fwd_attn, device=device)
-        self.ffwd = PFF(D_in)
+        self.ffwd = PFF(D_embed)
         self.dropout = nn.Dropout(p=dropout)
-        self.lnorm1 = nn.LayerNorm(D_in)
-        self.lnorm2 = nn.LayerNorm(D_in)
+        self.lnorm1 = nn.LayerNorm(D_embed)
+        self.lnorm2 = nn.LayerNorm(D_embed)
 
     def forward(self, X):
         """
         params
-        X (batch_size, T, D_in): input tensor
+        X (batch_size, T, D_embed): input tensor
 
         returns
-        (batch_size, T, D_in): output tensor
+        (batch_size, T, D_embed): output tensor
         """
         # multi-head attention segment
         R = X
