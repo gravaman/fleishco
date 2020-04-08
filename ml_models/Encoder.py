@@ -9,7 +9,7 @@ class Encoder(nn.Module):
     Attention output is summed with the input residual and then normalized.
     Resultant output is passed through a position-wise FFN.
     """
-    def __init__(self, D_in, Q, V, H, local_attn_size=None, fwd_attn=True,
+    def __init__(self, D_in, Q, V, H, local_attn_size=None, fwd_attn=False,
                  dropout=0.5, device=None):
         super(Encoder, self).__init__()
 

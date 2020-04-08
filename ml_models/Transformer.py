@@ -1,4 +1,3 @@
-import torch
 from torch import nn
 from Encoder import Encoder
 from Decoder import Decoder
@@ -41,9 +40,8 @@ class Transcoder(nn.Module):
                     local_attn_size=local_attn_size,
                     fwd_attn=fwd_attn, device=device) for _ in range(N)
         ])
-
-        self.embed_layer = nn.Linear(D_in, D_embed)
-        self.out_layer = nn.Linear(D_embed, D_out)
+        self.embedding_layer = nn.Linear(D_in, D_embed)
+        self.output_layer = nn.Linear(D_embed, D_out)
 
     def forward(self, X):
         """
@@ -53,23 +51,24 @@ class Transcoder(nn.Module):
         return
         y_pred (batch_size, T, D_in): output prediction
         """
+        # positionally encode and embed input
         T = X.size(1)
-
-        # embed and positionally encode input
-        X = self.embed_layer(X)
         PE = pos_encodings(T, self.P, self.D_embed).to(self.device)
+
+        X = self.embedding_layer(X)
         X = X.add_(PE)
 
-        # pass thru encoding layers
+        # pass inputs thru encoding layers
         for layer in self.encoding_layers:
             X = layer(X)
 
-        # pass thru decoding layers
+        # positionally encode outputs
         X = X.add_(PE)
+
+        # pass outputs thru decoding layers
         for layer in self.decoding_layers:
             X = layer(X)
 
         # generate output
-        X = torch.sigmoid(self.out_layer(X))
-
+        X = self.output_layer(X)
         return X

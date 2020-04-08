@@ -61,5 +61,4 @@ class Decoder(nn.Module):
         X = self.ffwd(X)
         X = self.dropout(X)
         X = self.lnorm3(R+X)
-
         return X

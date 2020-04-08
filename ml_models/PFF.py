@@ -32,4 +32,5 @@ class PFF(nn.Module):
         (batch_size, T, D_in): output tensor
         """
         X = self.relu(self.fcin(X))
-        return self.fcout(X)
+        X = self.fcout(X)
+        return X
