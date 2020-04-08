@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from Encoder import Encoder
 from Decoder import Decoder
+from utils import pos_encodings
 
 
 class Transcoder(nn.Module):
@@ -10,7 +11,7 @@ class Transcoder(nn.Module):
     """
     def __init__(self, D_in, D_embed, D_out, Q, V, H, N,
                  local_attn_size=None, fwd_attn=True, dropout=0.3,
-                 device=None):
+                 P=4, device=None):
         """
         params
         D_in (scalar): input feature dimension
@@ -22,10 +23,12 @@ class Transcoder(nn.Module):
         N (scalar): number of encoding and decoding layers
         local_attn_size (scalar): number of attention heads
         fwd_attn (bool): forward attention mask indicator
+        P (int): periods for positional encoding
         device: tensor device
         """
         super(Transcoder, self).__init__()
-
+        self.D_embed = D_embed
+        self.P = P
         self.device = device
 
         self.encoding_layers = nn.ModuleList([
@@ -50,14 +53,19 @@ class Transcoder(nn.Module):
         return
         y_pred (batch_size, T, D_in): output prediction
         """
-        # embed input
+        T = X.size(1)
+
+        # embed and positionally encode input
         X = self.embed_layer(X)
+        PE = pos_encodings(T, self.P, self.D_embed).to(self.device)
+        X = X.add_(PE)
 
         # pass thru encoding layers
         for layer in self.encoding_layers:
             X = layer(X)
 
         # pass thru decoding layers
+        X = X.add_(PE)
         for layer in self.decoding_layers:
             X = layer(X)
 
