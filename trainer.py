@@ -179,8 +179,7 @@ def project(model, dataset, loss_fn, device, title=None,
     logger_name (str): name of logger to use
 
     returns
-    avg_loss (float): average loss over projections
-    std_loss (float): standard deviation of loss over projections
+    loss_stats (tuple floats): avg and standard deviation of losses
     """
     # setup
     model.eval()
@@ -227,7 +226,8 @@ def project(model, dataset, loss_fn, device, title=None,
         line_plot(X, [Y_pred, Y], labels=['pred', 'true'],
                   title=title, should_show=should_show, savepath=savepath)
 
-    return avg_loss, std_loss
+    loss_stats = (avg_loss, std_loss)
+    return loss_stats
 
 
 def main():
@@ -258,7 +258,6 @@ def main():
     pmem = True if device.type == 'cuda' else False
 
     # loader setup
-    should_viz = True
     shapes, loaders, stats, tidxs = setup_dataloaders(
         ticker_dir,
         tickers_per_batch=tickers_per_batch,
@@ -266,13 +265,10 @@ def main():
         num_workers=num_workers, pmem=pmem)
     train_loader, val_loader, test_loader = loaders
 
-    if should_viz:
-        test_idx = tidxs[0]
-        test_idx = 0
-        ticker_path = list_files(ticker_dir)[test_idx]
-        test_ticker = path_to_ticker(ticker_path)
-        viz_dataset = get_viz_dataset(ticker_path, stats=stats)
-
+    test_idx = tidxs[0]
+    test_idx = 0
+    ticker_path = list_files(ticker_dir)[test_idx]
+    test_ticker = path_to_ticker(ticker_path)
     test_dataset = TickerDataset(ticker_path, index_col='Date',
                                  T_back=10, T_fwd=1, standardize=True)
     print(f'test dataset batches: {len(test_dataset)}')
@@ -326,6 +322,7 @@ def main():
     best_val_loss = float('inf')
     train_loss_fn = nn.MSELoss()
     eval_loss_fn = nn.MSELoss(reduction='sum')
+    L = np.zeros(epochs)
     for epoch in range(1, epochs+1):
         epoch_start_time = time.time()
         train(model, test_dataset, logger_name=model_type, device=device,
@@ -333,6 +330,7 @@ def main():
         val_loss = evaluate(model, test_dataset,
                             loss_fn=eval_loss_fn, device=device,
                             isdataset=True)
+        L[epoch-1] = val_loss
         epoch_time = time.time()-epoch_start_time
         print('-'*89)
         logger.info(
@@ -359,10 +357,15 @@ def main():
     )
     print('-'*89)
 
+    # plot training loss
+    loss_path = f'charts/{model_type}_training_loss.png'
+    line_plot(np.arange(1, epochs+1), [L], labels=['validation'],
+              title='training loss', should_show=True,
+              savepath=loss_path)
+
     # generate and plot projections
-    viz_dataset = test_dataset
     chart_path = f'charts/{model_type}_{test_ticker}.png'
-    project(best_model, viz_dataset, loss_fn=train_loss_fn, device=device,
+    project(best_model, test_dataset, loss_fn=train_loss_fn, device=device,
             title=test_ticker, should_show=True, savepath=chart_path,
             logger_name=logger_name)
 

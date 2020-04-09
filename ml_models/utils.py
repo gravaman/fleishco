@@ -47,6 +47,10 @@ def line_plot(x, Y, labels=None, title=None, should_show=True, savepath=None):
     """
     # generate plot
     fig, ax = plt.subplots()
+
+    if labels is None:
+        labels = [f'series {i}' for i in range(len(Y))]
+
     for y, label in zip(Y, labels):
         ax.plot(x, y, label=label)
 
