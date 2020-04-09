@@ -4,11 +4,17 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader
-from ml_models.StockDataset import StockDataset, StockBatch
+from ml_models.StockDataset import (
+    StockDataset, StockBatch,
+    TickerDataset
+)
 from ml_models.RNN import RNN
 from ml_models.LSTM import LSTM
 from ml_models.Transformer import Transformer
-from ml_models.utils import list_files
+from ml_models.utils import (
+    list_files, path_to_ticker,
+    line_plot
+)
 
 
 ##############################
@@ -72,17 +78,23 @@ def setup_dataloaders(ticker_dir, tickers_per_batch=4, mbatch_size=50,
                                index_col='Date')
         if i == 0:
             # get stats for training data
-            mu, std = dataset.get_stats()
+            stats = dataset.get_stats()
         else:
             # set stats for validation and testing data based on training
-            dataset.mu, dataset.std = mu, std
+            dataset.mu, dataset.std = stats
 
         shapes.append(dataset.size())
         loaders.append(DataLoader(dataset, batch_size=tickers_per_batch,
                                   shuffle=True, pin_memory=pmem,
                                   num_workers=num_workers,
                                   collate_fn=StockBatch))
-    return shapes, loaders
+
+    return shapes, loaders, stats, test_idxs
+
+
+def get_viz_dataset(ticker_path, stats):
+    dataset = TickerDataset(ticker_path, index_col='Date', stats=stats)
+    return dataset
 
 
 def test_dataloader(loader, logger_name):
@@ -95,17 +107,23 @@ def test_dataloader(loader, logger_name):
 
 
 def train(model, loader, optimizer, loss_fn, device, logger_name,
-          grad_norm_max=0.5, log_rate=0.25):
+          grad_norm_max=0.5, log_rate=0.25, isdataset=False):
     logger = logging.getLogger(logger_name)
     model.train()
     total_loss = 0.0
     start_time = time.time()
     total_steps = len(loader)
-    log_interval = int(np.floor(len(loader)*log_rate))
+    log_interval = max(int(np.floor(len(loader)*log_rate)), 1)
     for i, batch in enumerate(loader):
         optimizer.zero_grad()
-        y_pred = model(batch.X.to(device))
-        loss = loss_fn(y_pred, batch.y.to(device))
+        if isdataset:
+            X = batch[0].to(device)
+            y = batch[1].to(device)
+        else:
+            X = batch.X.to(device)
+            y = batch.y.to(device)
+        y_pred = model(X)
+        loss = loss_fn(y_pred, y)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(),
                                        grad_norm_max)
@@ -126,26 +144,104 @@ def train(model, loader, optimizer, loss_fn, device, logger_name,
             start_time = time.time()
 
 
-def evaluate(model, loader, loss_fn, device):
+def evaluate(model, loader, loss_fn, device, isdataset=False):
     model.eval()
     total_loss = 0.0
     total_count = 0
     with torch.no_grad():
         for batch in loader:
-            y_pred = model(batch.X.to(device))
-            total_loss += loss_fn(y_pred, batch.y.to(device)).item()
-            total_count += len(batch.X)
+            if isdataset:
+                X = batch[0].to(device)
+                y = batch[1].to(device)
+            else:
+                X = batch.X.to(device)
+                y = batch.y.to(device)
+            y_pred = model(X)
+            total_loss += loss_fn(y_pred, y)
+            total_count += len(X)
+
     return total_loss / total_count
 
 
+def project(model, dataset, loss_fn, device, title=None,
+            should_show=False, savepath=None, logger_name=None):
+    """
+    Generates projection and conditionally plots results.
+
+    params
+    model (nn.Module): model to use for projection
+    dataset (iterable): input dataset
+    loss_fn (nn.Module): evaluation loss function
+    device (torch.device): tensor device
+    title (str): chart title
+    should_show (bool): plot indicator
+    savepath (str): location for storing chart
+    logger_name (str): name of logger to use
+
+    returns
+    avg_loss (float): average loss over projections
+    std_loss (float): standard deviation of loss over projections
+    """
+    # setup
+    model.eval()
+    Y_pred, Y, L = [], [], []
+    base = dataset.base_index[-1]
+    if dataset.stats is not None:
+        mu, std = [stat[-1] for stat in dataset.stats]
+
+    # generate predictions
+    with torch.no_grad():
+        for X, y in dataset:
+            y_pred = model(X.to(device))
+
+            # get loss
+            loss = loss_fn(y_pred, y.to(device)).item()
+
+            # conditionally revert standardization
+            if dataset.stats is not None:
+                loss = loss*std+mu
+                y_pred, y = y_pred.cpu().numpy()*std+mu, y.numpy()*std+mu
+                y_pred, y = y_pred*base, y*base
+
+            # store loss
+            L.append(loss)
+
+            # store projections
+            y_pred, y = y_pred[:, -1], y[:, -1]
+            Y_pred = np.concatenate((Y_pred, y_pred), axis=0)
+            Y = np.concatenate((Y, y), axis=0)
+
+    # generate and log loss stats
+    L = np.array(L)
+    avg_loss, std_loss = L.mean(), L.std()
+
+    if logger_name is not None:
+        logger = logging.getLogger(logger_name)
+        logger.info(f'projection stats: avg loss {avg_loss:5.5f} '
+                    f' | std loss {std_loss:5.5f}')
+
+    # generate chart
+    if should_show or savepath is not None:
+        X = np.arange(len(Y_pred))
+        X = dataset.fwd_dates
+        line_plot(X, [Y_pred, Y], labels=['pred', 'true'],
+                  title=title, should_show=should_show, savepath=savepath)
+
+    return avg_loss, std_loss
+
+
 def main():
+    # set random seed
+    np.random.seed(0)
+
     # available types: rnn, lstm, tranformer
     model_type = 'transformer'
 
     assert model_type in MODEL_TYPES, f'unknown model_type: {model_type}'
 
     # logger setup
-    logger = setup_logger(model_type)
+    logger_name = model_type
+    logger = setup_logger(logger_name)
 
     # device setup
     if torch.cuda.is_available():
@@ -155,31 +251,49 @@ def main():
     logger.info(f'device type: {device.type}')
 
     # dataloaders setup
-    ticker_dir = 'data/equities'
+    ticker_dir = 'data/test'
     tickers_per_batch = 4
     mbatch_size = 400  # minibatch size
     num_workers = 4  # number of data loader workers
     pmem = True if device.type == 'cuda' else False
 
-    datashapes, (train_loader, val_loader, test_loader) = setup_dataloaders(
+    # loader setup
+    should_viz = True
+    shapes, loaders, stats, tidxs = setup_dataloaders(
         ticker_dir,
         tickers_per_batch=tickers_per_batch,
         mbatch_size=mbatch_size,
         num_workers=num_workers, pmem=pmem)
+    train_loader, val_loader, test_loader = loaders
+
+    if should_viz:
+        test_idx = tidxs[0]
+        test_idx = 0
+        ticker_path = list_files(ticker_dir)[test_idx]
+        test_ticker = path_to_ticker(ticker_path)
+        viz_dataset = get_viz_dataset(ticker_path, stats=stats)
+
+    test_dataset = TickerDataset(ticker_path, index_col='Date',
+                                 T_back=10, T_fwd=1, standardize=True)
+    print(f'test dataset batches: {len(test_dataset)}')
 
     # model setup
-    train_xshape, train_yshape = datashapes[0]
-    D_in = train_xshape[2]  # number of input features
-    D_out = train_yshape[1]  # number of output features
+    train_xshape, train_yshape = shapes[0]
+    # D_in = train_xshape[2]  # number of input features
+    D_in = 6  # from model
+    D_out = 1  # from model
+    # D_out = train_yshape[1]  # number of output features
     if model_type == 'transformer':
         D_embed = 512  # embedding dimension
-        Q = train_xshape[1]  # query matrix dimesion (T)
-        V = train_xshape[1]  # value matrix dimension (T)
+        # Q = train_xshape[1]  # query matrix dimesion (T)
+        # V = train_xshape[1]  # value matrix dimension (T)
+        Q = 10  # from model
+        V = 10  # from model
         H = 4  # number of heads
-        N = 4  # number of encoder and decoder stacks
+        N = 6  # number of encoder and decoder stacks
         attn_size = None  # local attention mask size
         dropout = 0.3  # dropout pct
-        P = 4  # periodicity of input data
+        P = 5  # periodicity of input data
         model = Transformer(D_in, D_embed, D_out, Q, V, H, N,
                             local_attn_size=attn_size, dropout=dropout,
                             P=P, device=device).to(device)
@@ -191,10 +305,10 @@ def main():
         model = RNN(D_in, H, D_out, device=device).to(device)
 
     # optimizer setup
-    optimize_type = 'sgd'
-    lr = 0.001  # learning rate
+    optimize_type = 'adam'
+    lr = 0.0001  # learning rate
     if optimize_type == 'adam':
-        wd = 0.99  # weight decay
+        wd = 0.0  # weight decay (L2 penalty)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr,
                                      weight_decay=wd)
     elif optimize_type == 'sgd':
@@ -206,17 +320,19 @@ def main():
                                                     gamma)
 
     # train model
-    epochs = 3
+    # TODO: change loader back to train_loader and val_loader!!!
+    epochs = 10
     best_model = None
     best_val_loss = float('inf')
     train_loss_fn = nn.MSELoss()
     eval_loss_fn = nn.MSELoss(reduction='sum')
     for epoch in range(1, epochs+1):
         epoch_start_time = time.time()
-        train(model, train_loader, logger_name=model_type, device=device,
-              optimizer=optimizer, loss_fn=train_loss_fn)
-        val_loss = evaluate(model, val_loader,
-                            loss_fn=eval_loss_fn, device=device)
+        train(model, test_dataset, logger_name=model_type, device=device,
+              optimizer=optimizer, loss_fn=train_loss_fn, isdataset=True)
+        val_loss = evaluate(model, test_dataset,
+                            loss_fn=eval_loss_fn, device=device,
+                            isdataset=True)
         epoch_time = time.time()-epoch_start_time
         print('-'*89)
         logger.info(
@@ -233,13 +349,22 @@ def main():
             scheduler.step()
 
     # eval model
-    test_loss = evaluate(best_model, test_loader,
-                         loss_fn=eval_loss_fn, device=device)
+    # TODO: change loader back to test_loader!!!
+    test_loss = evaluate(best_model, test_dataset,
+                         loss_fn=eval_loss_fn, device=device,
+                         isdataset=True)
     print('-'*89)
     logger.info(
         f'| End of training | test loss {test_loss:5.2f} | '
     )
     print('-'*89)
+
+    # generate and plot projections
+    viz_dataset = test_dataset
+    chart_path = f'charts/{model_type}_{test_ticker}.png'
+    project(best_model, viz_dataset, loss_fn=train_loss_fn, device=device,
+            title=test_ticker, should_show=True, savepath=chart_path,
+            logger_name=logger_name)
 
 
 if __name__ == '__main__':
