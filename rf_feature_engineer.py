@@ -2,7 +2,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import ShuffleSplit
 from sklearn.metrics import r2_score
 import numpy as np
-from db_query import build_feature_data
+from db.db_query import build_feature_data
 
 
 def check_impurity(sample_count=1000, n_estimators=100, max_depth=10):

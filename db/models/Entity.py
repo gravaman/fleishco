@@ -1,7 +1,7 @@
 import pandas as pd
 from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import relationship
-from models.DB import Base, db
+from db.models.DB import Base, db
 
 
 class Entity(Base):

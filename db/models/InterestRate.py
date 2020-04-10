@@ -2,7 +2,7 @@ from os import listdir
 from os.path import join, isfile
 import pandas as pd
 from sqlalchemy import Column, Integer, Float, Date
-from models.DB import Base, db
+from db.models.DB import Base, db
 
 
 class InterestRate(Base):

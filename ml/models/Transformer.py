@@ -1,7 +1,7 @@
 from torch import nn
-from ml_models.Encoder import Encoder
-from ml_models.Decoder import Decoder
-from ml_models.utils import pos_encodings
+from ml.models.Encoder import Encoder
+from ml.models.Decoder import Decoder
+from ml.models.utils import pos_encodings
 
 
 class Transformer(nn.Module):

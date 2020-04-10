@@ -4,7 +4,7 @@ from sqlalchemy import (
     Date, Boolean, ForeignKey
 )
 from sqlalchemy.orm import relationship
-from models.DB import Base, db
+from db.models.DB import Base, db
 
 
 class Corporate(Base):

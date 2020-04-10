@@ -1,6 +1,6 @@
 import torch.nn as nn
-from ml_models.MHA import MHA
-from ml_models.PFF import PFF
+from ml.models.MHA import MHA
+from ml.models.PFF import PFF
 
 
 class Decoder(nn.Module):

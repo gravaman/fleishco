@@ -1,11 +1,11 @@
 from sqlalchemy.sql import select, update
 from sqlalchemy.sql.expression import func
-from models.Corporate import Corporate
-from models.Entity import Entity
-from models.CorpTx import CorpTx  # noqa - needed for sqlalchemy table
-from models.Financial import Financial  # noqa - needed for sqlalchemy table
-from models.EquityPx import EquityPx  # noqa - needed for sqlalchemy table
-from models.DB import db, Base
+from db.models.Corporate import Corporate
+from db.models.Entity import Entity
+from db.models.CorpTx import CorpTx  # noqa - needed for sqlalchemy table
+from db.models.Financial import Financial  # noqa - needed for sqlalchemy table
+from db.models.EquityPx import EquityPx  # noqa - needed for sqlalchemy table
+from db.models.DB import db, Base
 
 
 INVALID_SUB_PRDCT_TYPES = ['CHRC', 'ELN', 'AGCY']

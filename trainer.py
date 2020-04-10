@@ -4,14 +4,14 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader
-from ml_models.StockDataset import (
+from ml.models.StockDataset import (
     StockDataset, StockBatch,
     TickerDataset
 )
-from ml_models.RNN import RNN
-from ml_models.LSTM import LSTM
-from ml_models.Transformer import Transformer
-from ml_models.utils import (
+from ml.models.RNN import RNN
+from ml.models.LSTM import LSTM
+from ml.models.Transformer import Transformer
+from ml.models.utils import (
     list_files, path_to_ticker,
     line_plot
 )

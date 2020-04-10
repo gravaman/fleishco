@@ -1,10 +1,10 @@
-from models.DB import Base
-from models.Entity import Entity
-from models.Corporate import Corporate
-from models.CorpTx import CorpTx
-from models.Financial import Financial
-from models.EquityPx import EquityPx
-from models.InterestRate import InterestRate
+from db.models.DB import Base
+from db.models.Entity import Entity
+from db.models.Corporate import Corporate
+from db.models.CorpTx import CorpTx
+from db.models.Financial import Financial
+from db.models.EquityPx import EquityPx
+from db.models.InterestRate import InterestRate
 
 
 DATA_SOURCES = dict(

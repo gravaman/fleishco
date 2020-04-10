@@ -4,8 +4,8 @@ from sqlalchemy import (
     Column, Integer, BigInteger,
     Float, String, Date, ForeignKey
 )
-from models.DB import Base, db
-from models.utils import get_tickers
+from db.models.DB import Base, db
+from db.models.utils import get_tickers
 
 
 class EquityPx(Base):

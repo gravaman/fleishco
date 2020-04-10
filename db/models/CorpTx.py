@@ -3,7 +3,7 @@ from sqlalchemy import (
     Column, Integer, Float, String,
     Date, ForeignKey
 )
-from models.DB import Base, db
+from db.models.DB import Base, db
 
 
 class CorpTx(Base):
