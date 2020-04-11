@@ -1,27 +1,23 @@
 import logging
 import time
 import torch
-import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader
+from db.db_query import get_corptx_ids
 from ml.models.StockDataset import (
-    StockDataset, StockBatch,
     TickerDataset
 )
+from ml.models.CreditDataset import CreditDataset
 from ml.models.RNN import RNN
 from ml.models.LSTM import LSTM
 from ml.models.Transformer import Transformer
-from ml.models.utils import (
-    list_files, path_to_ticker,
-    line_plot
-)
+from ml.models.MYELoss import MYELoss
+from ml.models.utils import line_plot
 
 
 ##############################
 # TODO
-# pull data from postgres
 # add CLI parser
-# visualizations
 ##############################
 
 # constants
@@ -47,21 +43,18 @@ def setup_logger(name, level='DEBUG', fmt=None):
     return logger
 
 
-def setup_dataloaders(ticker_dir, tickers_per_batch=4, mbatch_size=50,
-                      num_workers=4, pmem=False, train_split=0.7,
+def setup_dataloaders(ticker, release_window, T, limit=None, mbatch_size=50,
+                      num_workers=4, pin_memory=False, train_split=0.7,
                       val_split=0.2):
-    """
-    builds train, val, and test dataloaders
-    """
     # data splits
     test_split = 1-train_split-val_split
     assert test_split > 0, 'train_split+val_split must be less than 1'
 
-    ticker_paths = list_files(ticker_dir)
-    data_size = len(ticker_paths)
-    idxs = np.arange(data_size)
-    np.random.shuffle(idxs)
-
+    idxs = get_corptx_ids(ticker,
+                          release_window=release_window,
+                          release_count=T,
+                          limit=limit)
+    data_size = len(idxs)
     train_size = int(np.floor(data_size*train_split))
     val_size = int(np.floor(data_size*val_split))
 
@@ -70,26 +63,29 @@ def setup_dataloaders(ticker_dir, tickers_per_batch=4, mbatch_size=50,
     test_idxs = idxs[train_size+val_size:]
 
     # data loaders
-    shapes, loaders = [], []
-    StockBatch.mbatch_size = mbatch_size
+    datasets, loaders = [], []
     for i, ticker_idxs in enumerate([train_idxs, val_idxs, test_idxs]):
-        dataset = StockDataset(ticker_dir,
-                               idxs=ticker_idxs,
-                               index_col='Date')
         if i == 0:
-            # get stats for training data
-            stats = dataset.get_stats()
+            dataset = CreditDataset(ticker,
+                                    T=T,
+                                    standardize=True,
+                                    exclude_cols=CreditDataset.EX_COLS,
+                                    txids=ticker_idxs)
+            standard_stats = dataset.standard_stats
         else:
             # set stats for validation and testing data based on training
-            dataset.mu, dataset.std = stats
+            dataset = CreditDataset(ticker,
+                                    T=T,
+                                    standardize=True,
+                                    exclude_cols=CreditDataset.EX_COLS,
+                                    txids=ticker_idxs,
+                                    standard_stats=standard_stats)
+        datasets.append(dataset)
+        loaders.append(DataLoader(dataset, batch_size=mbatch_size,
+                                  shuffle=True, pin_memory=pin_memory,
+                                  num_workers=num_workers))
 
-        shapes.append(dataset.size())
-        loaders.append(DataLoader(dataset, batch_size=tickers_per_batch,
-                                  shuffle=True, pin_memory=pmem,
-                                  num_workers=num_workers,
-                                  collate_fn=StockBatch))
-
-    return shapes, loaders, stats, test_idxs
+    return datasets, loaders
 
 
 def get_viz_dataset(ticker_path, stats):
@@ -107,7 +103,7 @@ def test_dataloader(loader, logger_name):
 
 
 def train(model, loader, optimizer, loss_fn, device, logger_name,
-          grad_norm_max=0.5, log_rate=0.25, isdataset=False):
+          grad_norm_max=0.5, log_rate=0.25, pin_memory=False):
     logger = logging.getLogger(logger_name)
     model.train()
     total_loss = 0.0
@@ -116,20 +112,16 @@ def train(model, loader, optimizer, loss_fn, device, logger_name,
     log_interval = max(int(np.floor(len(loader)*log_rate)), 1)
     for i, batch in enumerate(loader):
         optimizer.zero_grad()
-        if isdataset:
-            X = batch[0].to(device)
-            y = batch[1].to(device)
-        else:
-            X = batch.X.to(device)
-            y = batch.y.to(device)
-        y_pred = model(X)
-        loss = loss_fn(y_pred, y)
-        loss.backward()
+        X_fin, X_ctx, y = [b.to(device, non_blocking=pin_memory)
+                           for b in batch]
+        y_pred = model(X_fin, X_ctx)
+        mse_loss, mye_loss = loss_fn(y_pred, y)
+        mse_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(),
                                        grad_norm_max)
         optimizer.step()
 
-        total_loss += loss.item()
+        total_loss += mye_loss.item()
         if i % log_interval == 0 and i > 0:
             cur_loss = total_loss / log_interval
             elapsed = time.time() - start_time
@@ -138,29 +130,30 @@ def train(model, loader, optimizer, loss_fn, device, logger_name,
                 f'| step {i:5d}/{total_steps:5d} '
                 f'| lr: {lr:0.4f} '
                 f'| ms/step: {elapsed*1000/log_interval:5.2f} '
-                f'| loss: {cur_loss:5.2f} '
+                f'| yield loss: {cur_loss:5.2f} '
             )
             total_loss = 0.0
             start_time = time.time()
 
 
-def evaluate(model, loader, loss_fn, device, isdataset=False):
+def evaluate(model, loader, loss_fn, device, logger_name,
+             pin_memory=False):
+    logger = logging.getLogger(logger_name)
     model.eval()
     total_loss = 0.0
-    total_count = 0
     with torch.no_grad():
         for batch in loader:
-            if isdataset:
-                X = batch[0].to(device)
-                y = batch[1].to(device)
-            else:
-                X = batch.X.to(device)
-                y = batch.y.to(device)
-            y_pred = model(X)
-            total_loss += loss_fn(y_pred, y)
-            total_count += len(X)
+            X_fin, X_ctx, y = [b.to(device, non_blocking=pin_memory)
+                               for b in batch]
+            y_pred = model(X_fin, X_ctx)
+            mu_y_pred = np.mean(y_pred.cpu().numpy())
+            mu_y = np.mean(y.cpu().numpy())
+            _, mye = loss_fn(y_pred, y)
+            logger.info(f'y_pred mu {mu_y_pred:5.4f} '
+                        f'| y mu: {mu_y:5.4f} | mye: {mye:5.4f}')
+            total_loss += mye
 
-    return total_loss / total_count
+    return total_loss / len(loader)
 
 
 def project(model, dataset, loss_fn, device, title=None,
@@ -251,46 +244,50 @@ def main():
     logger.info(f'device type: {device.type}')
 
     # dataloaders setup
-    ticker_dir = 'data/test'
-    tickers_per_batch = 4
-    mbatch_size = 400  # minibatch size
-    num_workers = 4  # number of data loader workers
-    pmem = True if device.type == 'cuda' else False
-
-    # loader setup
-    shapes, loaders, stats, tidxs = setup_dataloaders(
-        ticker_dir,
-        tickers_per_batch=tickers_per_batch,
-        mbatch_size=mbatch_size,
-        num_workers=num_workers, pmem=pmem)
+    max_data_size = 5000  # max number of records for all loaders
+    mbatch_size = 100  # minibatch size
+    num_workers = 12  # number of data loader workers
+    pin_memory = True if device.type == 'cuda' else False
+    ticker = 'AAPL'  # company symbol for corp_tx
+    T = 8  # financial periods to pull
+    release_window = T*90+10  # periods*filing req + buffer
+    datasets, loaders = setup_dataloaders(ticker=ticker,
+                                          release_window=release_window,
+                                          T=T, limit=max_data_size,
+                                          mbatch_size=mbatch_size,
+                                          num_workers=num_workers,
+                                          pin_memory=pin_memory)
     train_loader, val_loader, test_loader = loaders
+    for loader_type, loader in zip(['train', 'val', 'test'], loaders):
+        logger.info(f'{ticker} | loader type {loader_type} | '
+                    f'| batches {len(loader)} '
+                    f'| minibatch size {mbatch_size} '
+                    f'| total records {len(loader)*mbatch_size}')
 
-    test_idx = tidxs[0]
-    test_idx = 0
-    ticker_path = list_files(ticker_dir)[test_idx]
-    test_ticker = path_to_ticker(ticker_path)
-    test_dataset = TickerDataset(ticker_path, index_col='Date',
-                                 T_back=10, T_fwd=1, standardize=True)
-    print(f'test dataset batches: {len(test_dataset)}')
+    train_dataset = datasets[0]
+    train_stats = train_dataset.standard_stats.ctx_stats
+    logger.info(f'{loader_type} | mu: {train_stats.target[0][0]} '
+                f'| std: {train_stats.target[1][0]}')
 
     # model setup
-    train_xshape, train_yshape = shapes[0]
+    # train_xshape, train_yshape = shapes[0]
     # D_in = train_xshape[2]  # number of input features
-    D_in = 6  # from model
+    D_in = 23  # from model (6 equities)
+    D_ctx = 14  # from model (only for corp_txs)
     D_out = 1  # from model
     # D_out = train_yshape[1]  # number of output features
     if model_type == 'transformer':
         D_embed = 512  # embedding dimension
         # Q = train_xshape[1]  # query matrix dimesion (T)
         # V = train_xshape[1]  # value matrix dimension (T)
-        Q = 10  # from model
-        V = 10  # from model
+        Q = 8  # from model (10 equities)
+        V = 8  # from model (10 equities)
         H = 4  # number of heads
         N = 6  # number of encoder and decoder stacks
         attn_size = None  # local attention mask size
         dropout = 0.3  # dropout pct
-        P = 5  # periodicity of input data
-        model = Transformer(D_in, D_embed, D_out, Q, V, H, N,
+        P = 4  # periodicity of input data (equities 5)
+        model = Transformer(D_in, D_embed, D_ctx, D_out, Q, V, H, N,
                             local_attn_size=attn_size, dropout=dropout,
                             P=P, device=device).to(device)
     elif model_type == 'lstm':
@@ -302,7 +299,7 @@ def main():
 
     # optimizer setup
     optimize_type = 'adam'
-    lr = 0.0001  # learning rate
+    lr = 0.001  # learning rate
     if optimize_type == 'adam':
         wd = 0.0  # weight decay (L2 penalty)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr,
@@ -317,19 +314,21 @@ def main():
 
     # train model
     # TODO: change loader back to train_loader and val_loader!!!
-    epochs = 10
+    epochs = 2
     best_model = None
     best_val_loss = float('inf')
-    train_loss_fn = nn.MSELoss()
-    eval_loss_fn = nn.MSELoss(reduction='sum')
+    train_loss_fn = MYELoss(standard_stats=train_stats)
+    eval_loss_fn = MYELoss(standard_stats=train_stats)
     L = np.zeros(epochs)
     for epoch in range(1, epochs+1):
         epoch_start_time = time.time()
-        train(model, test_dataset, logger_name=model_type, device=device,
-              optimizer=optimizer, loss_fn=train_loss_fn, isdataset=True)
-        val_loss = evaluate(model, test_dataset,
+        train(model, train_loader, logger_name=logger_name, device=device,
+              optimizer=optimizer, loss_fn=train_loss_fn,
+              pin_memory=pin_memory)
+        val_loss = evaluate(model, val_loader,
                             loss_fn=eval_loss_fn, device=device,
-                            isdataset=True)
+                            logger_name=logger_name,
+                            pin_memory=pin_memory)
         L[epoch-1] = val_loss
         epoch_time = time.time()-epoch_start_time
         print('-'*89)
@@ -346,28 +345,44 @@ def main():
         if optimize_type == 'sgd':
             scheduler.step()
 
-    # eval model
-    # TODO: change loader back to test_loader!!!
-    test_loss = evaluate(best_model, test_dataset,
+    # eval model on test data
+    test_loss = evaluate(best_model, test_loader,
                          loss_fn=eval_loss_fn, device=device,
-                         isdataset=True)
+                         logger_name=logger_name,
+                         pin_memory=pin_memory)
+    test_loss = test_loss.item()
+
+    train_stats = datasets[0].standard_stats
+    y_mu_train, y_std_train = train_stats.target
+    y_mu_train, y_std_train = y_mu_train[0], y_std_train[0]
+    # y_mu_train, y_std_train = ctx_stats[0][0, -1], ctx_stats[1][0, -1]
+
+    test_stats = datasets[2].get_stats()
+    y_mu_test, y_std_test = test_stats.target
+    y_mu_test, y_std_test = y_mu_test[0], y_std_test[0]
+
     print('-'*89)
     logger.info(
-        f'| End of training | test loss {test_loss:5.2f} | '
+        f'| End of training | test yield loss {test_loss:5.2f} '
+        f'| mean test yield {y_mu_test:5.2f} '
+        f'| std test yield {y_std_test:5.2f} '
+        f'| mean train yield {y_mu_train:5.2f} '
+        f'| std train yield {y_std_train:5.2f} '
     )
     print('-'*89)
 
     # plot training loss
-    loss_path = f'charts/{model_type}_training_loss.png'
+    loss_path = f'ml/charts/{model_type}_training_loss.png'
     line_plot(np.arange(1, epochs+1), [L], labels=['validation'],
-              title='training loss', should_show=True,
+              title='training yield loss', should_show=True,
               savepath=loss_path)
 
     # generate and plot projections
-    chart_path = f'charts/{model_type}_{test_ticker}.png'
-    project(best_model, test_dataset, loss_fn=train_loss_fn, device=device,
-            title=test_ticker, should_show=True, savepath=chart_path,
-            logger_name=logger_name)
+    if False:
+        chart_path = f'ml/charts/{model_type}_{ticker}.png'
+        project(best_model, test_loader, loss_fn=train_loss_fn, device=device,
+                title=ticker, should_show=True, savepath=chart_path,
+                logger_name=logger_name)
 
 
 if __name__ == '__main__':

@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 from ml.models.Encoder import Encoder
 from ml.models.Decoder import Decoder
@@ -8,19 +9,20 @@ class Transformer(nn.Module):
     """
     Attention-based Transformer based on 'All You Need Is Attention' paper.
     """
-    def __init__(self, D_in, D_embed, D_out, Q, V, H, N,
+    def __init__(self, D_in, D_embed, D_ctx, D_out, Q, V, H, N,
                  local_attn_size=None, dropout=0.3, P=4,
                  device=None):
         """
         params
-        D_in (scalar): input feature dimension
-        D_embed (scalar): embedding dimension
-        D_out (scalar): output feature dimension
-        Q (scalar): query matrix dimension
-        V (scalar): value matrix dimension
-        H (scalar): number of attention heads
-        N (scalar): number of encoding and decoding layers
-        local_attn_size (scalar): number of attention heads
+        D_in (int): input feature dimension
+        D_embed (int): embedding dimension
+        D_ctx (int): corp_tx dimension
+        D_out (int): output feature dimension
+        Q (int): query matrix dimension
+        V (int): value matrix dimension
+        H (int): number of attention heads
+        N (int): number of encoding and decoding layers
+        local_attn_size (int): number of attention heads
         P (int): periods for positional encoding
         device: tensor device
         """
@@ -40,37 +42,43 @@ class Transformer(nn.Module):
                     local_attn_size=local_attn_size,
                     fwd_attn=True, device=device) for _ in range(N)
         ])
-        self.output_layer = nn.Linear(Q*D_embed, D_out)
+        self.ctx_layer = nn.Linear(Q*D_embed+D_ctx, 2*(Q*D_embed+D_ctx))
+        self.relu = nn.ReLU()
+        self.output_layer = nn.Linear(2*(Q*D_embed+D_ctx), D_out)
 
-    def forward(self, X):
+    def forward(self, X_fin, X_ctx):
         """
         params
-        X (batch_size, T, D_in): input minibatch
+        X_fin (batch_size, T, D_in): input financials minibatch
+        X_ctx (batch_size, 1, D_ctx): input corp_tx minibatch
 
         return
         y_pred (batch_size, T, D_out): output prediction
         """
         # positionally encode and embed input
-        batch_size, T, _ = X.size()
+        batch_size, T, _ = X_fin.size()
         PE = pos_encodings(T, self.P, self.D_embed).to(self.device)
 
-        X = self.embedding_layer(X)
-        X = X.add_(PE)
+        X_fin = self.embedding_layer(X_fin)
+        X_fin = X_fin.add_(PE)
 
         # pass inputs thru encoding layers
         for layer in self.encoding_layers:
-            X = layer(X)
+            X_fin = layer(X_fin)
 
         # positionally encode outputs
-        encoded_attn = X
-        X = X.add_(PE)
+        encoded_attn = X_fin
+        X_fin = X_fin.add_(PE)
 
         # pass outputs thru decoding layers
-        # X: (batch_size, T, D_embed)
+        # X_fin: (batch_size, T, D_embed)
         for layer in self.decoding_layers:
-            X = layer(X, encoded_attn=encoded_attn)
+            X_fin = layer(X_fin, encoded_attn=encoded_attn)
 
-        # reshape and generate output
-        X = X.reshape(batch_size, -1)
-        X = self.output_layer(X)
-        return X
+        # combine with corp_tx inputs and generate output
+        X_fin = X_fin.reshape(batch_size, -1)
+        X_out = torch.cat((X_fin, X_ctx.reshape(batch_size, -1)), dim=1)
+        X_out = self.ctx_layer(X_out)
+        X_out = self.relu(X_out)
+        X_out = self.output_layer(X_out)
+        return X_out

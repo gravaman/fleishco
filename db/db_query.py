@@ -256,11 +256,11 @@ def get_corptx_ids(ticker, release_window, release_count, limit):
             and_(
                 days_from_release <= release_window,
                 days_from_release > 0)) \
-        .distinct(CorpTx.company_symbol, CorpTx.trans_dt) \
+        .distinct(CorpTx.cusip_id, CorpTx.company_symbol, CorpTx.trans_dt) \
         .having(
             func.count(Financial.earnings_release_date) >= release_count
         ).group_by(CorpTx.id) \
-        .order_by(CorpTx.company_symbol, CorpTx.trans_dt.desc())
+        .order_by(CorpTx.trans_dt.asc())
 
     if limit is not None:
         s = s.limit(limit)
