@@ -12,6 +12,73 @@ from db.models.InterestRate import InterestRate
 from db.models.DB import db
 
 
+DROP_COLS = [
+        'avgsharesoutstandingbasic', 'avgdilutedsharesoutstanding',
+        'commonstockdividendspershare', 'operatingexpenses',
+        'operatingexpenseexitems', 'operatingincome', 'ebitda',
+        'earningsbeforetaxes', 'netincome', 'totalinvestments',
+        'availableforsalesecurities', 'currentassets', 'assets',
+        'currentlongtermdebt', 'longtermdebt',
+        'lineofcreditfacilityamountoutstanding', 'secureddebt',
+        'convertibledebt', 'termloan', 'mortgagedebt', 'unsecureddebt',
+        'mediumtermnotes', 'trustpreferredsecurities', 'seniornotes',
+        'subordinateddebt', 'operatingcashflow', 'investingcashflow',
+        'financingcashflow', 'paymentsofdividends', 'capex',
+        'stockrepurchasedduringperiodvalue', 'adj_close',
+        'stockrepurchasedduringperiodshares',
+        'incometaxespaid', 'interestpaidnet',
+        'sharesoutstandingendofperiod', 'restrictedcashandinvestmentscurrent',
+        'paymentsofdividendspreferredstock', 'paymentsofdividendscommonstock',
+        'paymentsofdividendsnoncontrollinginterest', 'assetimpairment',
+        'restructuring'
+    ]
+
+# residual columns
+other_opex = (Financial.operatingexpenses -
+              Financial.sgaexpense -
+              Financial.researchanddevelopment -
+              Financial.depreciationandamortizationexpense -
+              Financial.operatingexpenseexitems).label('other_opex')
+
+other_investments = (Financial.totalinvestments -
+                     Financial.shortterminvestments -
+                     Financial.longterminvestments).label('other_investments')
+
+other_current_assets = (Financial.currentassets -
+                        Financial.shortterminvestments -
+                        Financial.cash).label('other_current_assets')
+
+other_lt_assets = (Financial.assets -
+                   Financial.ppe -
+                   Financial.longterminvestments -
+                   Financial.currentassets).label('other_lt_assets')
+
+other_opcf = (Financial.operatingcashflow -
+              Financial.netincome -
+              Financial.depreciationamortization -
+              Financial.sharebasedcompensation -
+              Financial.assetimpairment).label('other_opcf')
+
+other_invcf = (Financial.investingcashflow -
+               Financial.capex -
+               Financial.acquisitiondivestitures).label('other_invcf')
+
+dividends = (Financial.paymentsofdividendscommonstock +
+             Financial.paymentsofdividendspreferredstock +
+             Financial.paymentsofdividendsnoncontrollinginterest
+             ).label('dividends')
+
+other_fincf = (Financial.financingcashflow -
+               Financial.paymentsofdividendscommonstock -
+               Financial.paymentsofdividendspreferredstock -
+               Financial.paymentsofdividendsnoncontrollinginterest
+               ).label('other_fincf')
+
+other_cols = ['other_opex', 'other_investments', 'other_current_assets',
+              'other_lt_assets', 'other_opcf', 'other_invcf', 'dividends',
+              'other_fincf']
+
+
 def build_dataset():
     # list of tickers and transaction dates
     s = db.query(CorpTx.company_symbol, CorpTx.trans_dt) \
@@ -212,7 +279,8 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
         'incometaxespaid', 'interestpaidnet',
         'sharesoutstandingendofperiod', 'restrictedcashandinvestmentscurrent',
         'paymentsofdividendspreferredstock', 'paymentsofdividendscommonstock',
-        'paymentsofdividendsnoncontrollinginterest'
+        'paymentsofdividendsnoncontrollinginterest', 'assetimpairment',
+        'restructuring'
     ]
     df = df.drop(labels=DROP_COLS, axis=1).dropna(axis=1, how='all')
 
@@ -227,7 +295,7 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
     return x, y, outcols
 
 
-def get_corptx_ids(ticker, release_window, release_count, limit):
+def get_corptx_ids(tickers, release_window, release_count, limit):
     """
     Gets sample_count ids for ticker with at least release_count earnings
     within release_window.
@@ -241,11 +309,36 @@ def get_corptx_ids(ticker, release_window, release_count, limit):
     returns
     ids (1D np arr): matching ids
     """
+
+    # subquery relevant corp_tx ids
+    ctx_tick_stmt = db.query(CorpTx) \
+        .filter(
+            CorpTx.company_symbol.in_(tickers)
+        ).subquery()
+
+    # subquery corp_txs for release_count financial releases during window
     days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
+    fin_count = func.count(Financial.id).label('fin_count')
+
+    window_stmt = db.query(CorpTx.id, fin_count) \
+        .select_from(CorpTx) \
+        .join(ctx_tick_stmt, ctx_tick_stmt.c.id == CorpTx.id) \
+        .join(Financial, Financial.ticker == CorpTx.company_symbol) \
+        .filter(
+            and_(
+                days_from_release <= release_window,
+                days_from_release > 0,
+                CorpTx.close_yld > 0
+            )
+        ).group_by(
+            CorpTx.id
+        ).having(
+            fin_count == release_count
+        ).subquery()
 
     s = db.query(CorpTx.id) \
         .select_from(CorpTx) \
-        .filter(CorpTx.company_symbol == ticker) \
+        .join(window_stmt, CorpTx.id == window_stmt.c.id) \
         .join(
             EquityPx,
             and_(CorpTx.company_symbol == EquityPx.ticker,
@@ -257,20 +350,15 @@ def get_corptx_ids(ticker, release_window, release_count, limit):
                 days_from_release <= release_window,
                 days_from_release > 0)) \
         .distinct(CorpTx.cusip_id, CorpTx.company_symbol, CorpTx.trans_dt) \
-        .having(
-            func.count(Financial.earnings_release_date) >= release_count
-        ).group_by(CorpTx.id) \
-        .order_by(CorpTx.trans_dt.asc())
-
-    if limit is not None:
-        s = s.limit(limit)
+        .order_by(CorpTx.trans_dt.asc()) \
+        .limit(limit)
 
     ids = db.execute(s).fetchall()
-    ids = np.array(ids).flatten()
-    return np.unique(ids)
+    return np.array(ids).flatten()
 
 
-def get_credit_data(id, release_window, limit, exclude_cols=[]):
+def get_credit_data(ids, release_window, release_count, limit,
+                    exclude_cols=[]):
     """
     Gets dataset consisting of interest rate, financial,
     credit terms, and yield data by transaction. Financial data
@@ -285,15 +373,21 @@ def get_credit_data(id, release_window, limit, exclude_cols=[]):
     fin (nd array): cleaned financials and equity price time series data
     tx (nd array): cleaned corp tx and interest rate data
     """
-    financials = _get_financial_data(id, release_window, limit)
+    financials = _get_financial_data(ids, release_window, release_count, limit)
     dffin = _clean_financial_data(financials, exclude_cols=exclude_cols)
 
-    credit_txs = _get_credit_tx_data(id)
+    credit_txs = _get_credit_tx_data(ids)
     dftx = _clean_credit_tx_data(credit_txs)
     return dffin.values, dftx.values
 
 
-def _get_financial_data(id, release_window, limit):
+def get_fin_cols(id, release_window, limit, exclude_cols=[]):
+    financials = _get_financial_data(id, release_window, limit)
+    dffin = _clean_financial_data(financials, exclude_cols=exclude_cols)
+    return dffin.columns.values
+
+
+def _get_financial_data(ids, release_window, release_count, limit):
     """
     Gets financials and equity px time series for corp_tx id
 
@@ -305,11 +399,38 @@ def _get_financial_data(id, release_window, limit):
     returns
     samples (list): queried samples
     """
-    days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
+    # subquery relevant corp_tx ids
+    ctx_id_stmt = db.query(CorpTx) \
+        .filter(
+            CorpTx.id.in_(ids)
+        ).subquery()
 
-    s = db.query(EquityPx.adj_close, Financial) \
+    # subquery corp_txs for release_count financial releases during window
+    days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
+    fin_count = func.count(Financial.id).label('fin_count')
+
+    window_stmt = db.query(CorpTx.id, fin_count) \
         .select_from(CorpTx) \
-        .filter(CorpTx.id == id) \
+        .join(ctx_id_stmt, ctx_id_stmt.c.id == CorpTx.id) \
+        .join(Financial, Financial.ticker == CorpTx.company_symbol) \
+        .filter(
+            and_(
+                days_from_release <= release_window,
+                days_from_release > 0,
+                CorpTx.close_yld > 0
+            )
+        ).group_by(
+            CorpTx.id
+        ).having(
+            fin_count == release_count
+        ).subquery()
+
+    # query financials with equity px and interest rate data
+    s = db.query(EquityPx.adj_close, Financial, other_opex,
+                 other_investments, other_current_assets, other_lt_assets,
+                 other_opcf, other_invcf, dividends, other_fincf) \
+        .select_from(CorpTx) \
+        .join(window_stmt, CorpTx.id == window_stmt.c.id) \
         .join(EquityPx,
               and_(CorpTx.company_symbol == EquityPx.ticker,
                    CorpTx.trans_dt == EquityPx.date)) \
@@ -318,22 +439,21 @@ def _get_financial_data(id, release_window, limit):
         .filter(
             and_(
                 days_from_release <= release_window,
-                days_from_release > 0)) \
-        .order_by(CorpTx.company_symbol,
-                  CorpTx.trans_dt.desc(),
-                  Financial.earnings_release_date.desc()) \
-        .distinct(CorpTx.company_symbol,
+                days_from_release > 0
+            )) \
+        .distinct(CorpTx.cusip_id,
                   CorpTx.trans_dt,
-                  Financial.earnings_release_date)
+                  Financial.earnings_release_date) \
+        .order_by(
+            CorpTx.cusip_id,
+            CorpTx.trans_dt.desc(),
+            Financial.earnings_release_date.desc()
+        ).limit(limit)
 
-    if limit is not None:
-        s = s.limit(limit)
-
-    samples = db.execute(s).fetchall()
-    return samples
+    return db.execute(s).fetchall()
 
 
-def _get_credit_tx_data(id):
+def _get_credit_tx_data(ids):
     """
     Gets credit samples for given corp_tx id
 
@@ -343,7 +463,8 @@ def _get_credit_tx_data(id):
     returns
     samples (list): queried samples
     """
-    s = db.query(CorpTx.trans_dt, CorpTx.mtrty_dt, CorpTx.close_yld,
+    days_to_mtrty = (CorpTx.mtrty_dt-CorpTx.trans_dt).label('days_to_mtrty')
+    s = db.query(days_to_mtrty, CorpTx.close_yld,
                  InterestRate.BAMLC0A1CAAASYTW,
                  InterestRate.BAMLC0A2CAASYTW,
                  InterestRate.BAMLC0A3CASYTW,
@@ -358,11 +479,10 @@ def _get_credit_tx_data(id):
                  InterestRate.BAMLC7A0C1015YSYTW,
                  InterestRate.BAMLC8A0C15PYSYTW) \
         .select_from(CorpTx) \
-        .filter(CorpTx.id == id) \
+        .filter(CorpTx.id.in_(ids)) \
         .join(InterestRate, CorpTx.trans_dt == InterestRate.date)
 
-    samples = db.execute(s).fetchall()
-    return samples
+    return db.execute(s).fetchall()
 
 
 def _clean_credit_tx_data(samples):
@@ -376,21 +496,11 @@ def _clean_credit_tx_data(samples):
     df (pd df): cleaned samples with last col target close_yld
     """
     # convert to df
-    corp_tx_cols = ['trans_dt', 'mtrty_dt', 'close_yld']
+    corp_tx_cols = ['days_to_mtrty', 'close_yld']
     rate_cols = [c for c in InterestRate.__table__.columns.keys()
                  if c not in ['id', 'date']]
     incols = corp_tx_cols + rate_cols
     df = pd.DataFrame(samples, columns=incols)
-
-    # calculate days to maturity
-    df['days_to_mtrty'] = (df.mtrty_dt-df.trans_dt)/np.timedelta64(1, 'D')
-
-    # drop non-financial cols and fill nans with 0
-    drop_cols = ['mtrty_dt', 'trans_dt']
-    df = df.drop(labels=drop_cols, axis=1)
-    # df = pd.DataFrame(df.values,
-    #                   columns=df.columns.values,
-    #                   dtype=np.float64)
 
     # reduce complexity of rating based interest rate cols
     df.loc[:, 'BAMLH0A3HYCSYTW'] -= df.BAMLH0A2HYBSYTW
@@ -409,8 +519,7 @@ def _clean_credit_tx_data(samples):
 
     # order cols interest rates, instrument metrics
     out_cols = rate_cols + ['days_to_mtrty', 'close_yld']
-    df = df[out_cols]
-    return df
+    return df[out_cols]
 
 
 def _clean_financial_data(samples, exclude_cols=[]):
@@ -424,7 +533,7 @@ def _clean_financial_data(samples, exclude_cols=[]):
     df (pd df): cleaned samples
     """
     # convert to df
-    colnames = ['adj_close'] + Financial.__table__.columns.keys()
+    colnames = ['adj_close'] + Financial.__table__.columns.keys() + other_cols
     df = pd.DataFrame(samples, columns=colnames)
 
     # drop non-financial cols and fill nans with 0
@@ -437,16 +546,6 @@ def _clean_financial_data(samples, exclude_cols=[]):
                       columns=df.columns.values,
                       dtype=np.float64).fillna(0)
 
-    # reduce complexity by adding line item complements
-    # residual opex
-    df['other_opex'] = df.operatingexpenses - df.sgaexpense \
-        - df.researchanddevelopment - df.depreciationandamortizationexpense \
-        - df.operatingexpenseexitems
-
-    # residual addbacks
-    df['other_addbacks'] = df.operatingexpenseexitems - df.restructuring \
-        - df.assetimpairment
-
     # residual investments
     # consolidate afs and sti
     df.shortterminvestments = np.where(
@@ -454,63 +553,16 @@ def _clean_financial_data(samples, exclude_cols=[]):
         df.shortterminvestments,
         df.shortterminvestments + df.availableforsalesecurities)
 
-    df['other_investments'] = df.totalinvestments \
-        - df.shortterminvestments - df.longterminvestments
-
-    # residual current assets
-    df['other_current_assets'] = df.currentassets - df.shortterminvestments \
-        - df.cash
-
-    # residual other long-term assets
-    df['other_lt_assets'] = df.assets - df.ppe - df.longterminvestments \
-        - df.currentassets
-
-    # residual cash flow statement
-    df['other_opcf'] = df.operatingcashflow - df.netincome \
-        - df.depreciationamortization - df.sharebasedcompensation \
-        - df.assetimpairment
-
-    df['other_invcf'] = df.investingcashflow - df.capex \
-        - df.acquisitiondivestitures
-
-    df['dividends'] = df.paymentsofdividendscommonstock \
-        + df.paymentsofdividendspreferredstock \
-        + df.paymentsofdividendsnoncontrollinginterest \
-
-    df['other_fincf'] = df.financingcashflow \
-        - df.dividends \
-        - df.paymentsforrepurchaseofcommonstock
-
     # capitalization adjustments:
     # [1] calculate mkt cap and ev
     # [2] normalize each row by ev
     df['mkt_cap'] = df.adj_close * df.sharesoutstandingendofperiod
-    df['ev'] = df.mkt_cap + df.totaldebt - df.cash \
+    ev = df.mkt_cap + df.totaldebt - df.cash \
         - df.shortterminvestments - df.longterminvestments
-    df = df.div(df.ev, axis=0)
+    df = df.div(ev, axis=0)
 
     # drop unnecessary cols
-    DROP_COLS = [
-        'avgsharesoutstandingbasic', 'avgdilutedsharesoutstanding',
-        'commonstockdividendspershare', 'operatingexpenses',
-        'operatingexpenseexitems', 'operatingincome', 'ebitda',
-        'earningsbeforetaxes', 'netincome', 'totalinvestments',
-        'availableforsalesecurities', 'currentassets', 'assets',
-        'currentlongtermdebt', 'longtermdebt',
-        'lineofcreditfacilityamountoutstanding', 'secureddebt',
-        'convertibledebt', 'termloan', 'mortgagedebt', 'unsecureddebt',
-        'mediumtermnotes', 'trustpreferredsecurities', 'seniornotes',
-        'subordinateddebt', 'operatingcashflow', 'investingcashflow',
-        'financingcashflow', 'paymentsofdividends', 'capex', 'ev',
-        'stockrepurchasedduringperiodvalue', 'adj_close',
-        'stockrepurchasedduringperiodshares',
-        'incometaxespaid', 'interestpaidnet',
-        'sharesoutstandingendofperiod', 'restrictedcashandinvestmentscurrent',
-        'paymentsofdividendspreferredstock', 'paymentsofdividendscommonstock',
-        'paymentsofdividendsnoncontrollinginterest'
-    ] + exclude_cols
-    df = df.drop(labels=DROP_COLS, axis=1)
-    return df
+    return df.drop(labels=DROP_COLS+exclude_cols, axis=1)
 
 
 def _clean_credit_samples(samples):
@@ -633,7 +685,8 @@ def _clean_credit_samples(samples):
         'incometaxespaid', 'interestpaidnet',
         'sharesoutstandingendofperiod', 'restrictedcashandinvestmentscurrent',
         'paymentsofdividendspreferredstock', 'paymentsofdividendscommonstock',
-        'paymentsofdividendsnoncontrollinginterest'
+        'paymentsofdividendsnoncontrollinginterest', 'assetimpairment',
+        'restructuring'
     ]
     df = df.drop(labels=DROP_COLS, axis=1).dropna(axis=1, how='all')
 

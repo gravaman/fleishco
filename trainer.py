@@ -43,14 +43,14 @@ def setup_logger(name, level='DEBUG', fmt=None):
     return logger
 
 
-def setup_dataloaders(ticker, release_window, T, limit=None, mbatch_size=50,
+def setup_dataloaders(tickers, release_window, T, limit=None, mbatch_size=50,
                       num_workers=4, pin_memory=False, train_split=0.7,
                       val_split=0.2):
     # data splits
     test_split = 1-train_split-val_split
     assert test_split > 0, 'train_split+val_split must be less than 1'
 
-    idxs = get_corptx_ids(ticker,
+    idxs = get_corptx_ids(tickers,
                           release_window=release_window,
                           release_count=T,
                           limit=limit)
@@ -66,18 +66,18 @@ def setup_dataloaders(ticker, release_window, T, limit=None, mbatch_size=50,
     datasets, loaders = [], []
     for i, ticker_idxs in enumerate([train_idxs, val_idxs, test_idxs]):
         if i == 0:
-            dataset = CreditDataset(ticker,
+            dataset = CreditDataset(tickers,
                                     T=T,
                                     standardize=True,
-                                    exclude_cols=CreditDataset.EX_COLS,
+                                    exclude_cols=CreditDataset.EX_COLS_QCOM,
                                     txids=ticker_idxs)
             standard_stats = dataset.standard_stats
         else:
             # set stats for validation and testing data based on training
-            dataset = CreditDataset(ticker,
+            dataset = CreditDataset(tickers,
                                     T=T,
                                     standardize=True,
-                                    exclude_cols=CreditDataset.EX_COLS,
+                                    exclude_cols=CreditDataset.EX_COLS_QCOM,
                                     txids=ticker_idxs,
                                     standard_stats=standard_stats)
         datasets.append(dataset)
@@ -244,14 +244,16 @@ def main():
     logger.info(f'device type: {device.type}')
 
     # dataloaders setup
-    max_data_size = 5000  # max number of records for all loaders
-    mbatch_size = 100  # minibatch size
+    # AAPL: 33792, 1024
+    # LTD: 11264, 1024
+    tickers = ['AAPL', 'QCOM']  # company symbols for corp_tx
+    max_data_size = 8192  # max number of records for all loaders
+    mbatch_size = 512  # minibatch size
     num_workers = 12  # number of data loader workers
     pin_memory = True if device.type == 'cuda' else False
-    ticker = 'AAPL'  # company symbol for corp_tx
     T = 8  # financial periods to pull
     release_window = T*90+10  # periods*filing req + buffer
-    datasets, loaders = setup_dataloaders(ticker=ticker,
+    datasets, loaders = setup_dataloaders(tickers=tickers,
                                           release_window=release_window,
                                           T=T, limit=max_data_size,
                                           mbatch_size=mbatch_size,
@@ -259,7 +261,7 @@ def main():
                                           pin_memory=pin_memory)
     train_loader, val_loader, test_loader = loaders
     for loader_type, loader in zip(['train', 'val', 'test'], loaders):
-        logger.info(f'{ticker} | loader type {loader_type} | '
+        logger.info(f'{tickers} | loader type {loader_type} | '
                     f'| batches {len(loader)} '
                     f'| minibatch size {mbatch_size} '
                     f'| total records {len(loader)*mbatch_size}')
@@ -272,7 +274,7 @@ def main():
     # model setup
     # train_xshape, train_yshape = shapes[0]
     # D_in = train_xshape[2]  # number of input features
-    D_in = 23  # from model (6 equities)
+    D_in = 24  # from model (6 equities; 23 AAPL)
     D_ctx = 14  # from model (only for corp_txs)
     D_out = 1  # from model
     # D_out = train_yshape[1]  # number of output features
@@ -299,9 +301,9 @@ def main():
 
     # optimizer setup
     optimize_type = 'adam'
-    lr = 0.001  # learning rate
+    lr = 0.0001  # learning rate
     if optimize_type == 'adam':
-        wd = 0.0  # weight decay (L2 penalty)
+        wd = 0.1  # weight decay (L2 penalty)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr,
                                      weight_decay=wd)
     elif optimize_type == 'sgd':
@@ -313,8 +315,7 @@ def main():
                                                     gamma)
 
     # train model
-    # TODO: change loader back to train_loader and val_loader!!!
-    epochs = 2
+    epochs = 15
     best_model = None
     best_val_loss = float('inf')
     train_loss_fn = MYELoss(standard_stats=train_stats)
@@ -379,9 +380,9 @@ def main():
 
     # generate and plot projections
     if False:
-        chart_path = f'ml/charts/{model_type}_{ticker}.png'
+        chart_path = f'ml/charts/{model_type}_IG_Tech.png'
         project(best_model, test_loader, loss_fn=train_loss_fn, device=device,
-                title=ticker, should_show=True, savepath=chart_path,
+                title='IG Tech', should_show=True, savepath=chart_path,
                 logger_name=logger_name)
 
 

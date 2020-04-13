@@ -1,27 +1,53 @@
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from db.db_query import get_corptx_ids, get_credit_data
+from db.db_query import (
+    get_corptx_ids,
+    get_credit_data,
+    get_fin_cols
+)
 
 
 class CreditDataset(Dataset):
     """Credit Specific Dataset"""
 
     # based on AAPL sample data (update as needed)
-    EX_COLS = [
+    EX_COLS_AAPL = [
         'assetimpairment', 'restructuring',
         'depreciationandamortizationexpense',
         'interestexpense', 'capitalassetsales',
         'other_opex', 'other_addbacks', 'dividends'
     ]
+    EX_COLS_CHTR = [
+        'sgaexpense', 'researchanddevelopment',
+        'shortterminvestments', 'longterminvestments',
+        'sharebasedcompensation', 'acquisitiondivestitures',
+        'other_investments', 'assetimpairment',
+        'restructuring', 'capitalassetsales', 'other_addbacks',
+        'dividends'
+    ]
+    EX_COLS_MSFT = [
+        'depreciationandamortizationexpense', 'interestexpense',
+        'capitalassetsales', 'acquisitiondivestitures',
+        'other_opex', 'other_addbacks'
+    ]
+    EX_COLS_IBM = [
+        'depreciationandamortizationexpense', 'interestexpense',
+        'capitalassetsales', 'acquisitiondivestitures',
+        'other_opex', 'other_addbacks', 'longterminvestments'
+    ]
+    EX_COLS_QCOM = [
+        'depreciationandamortizationexpense', 'acquisitiondivestitures',
+        'other_addbacks', 'dividends', 'capitalassetsales'
+    ]
 
-    def __init__(self, ticker, T=8, limit=None, standardize=False,
+    def __init__(self, tickers, T=8, limit=None, standardize=False,
                  exclude_cols=[], txids=None, standard_stats=None):
         """
         Initializes credit dataset
 
         params:
-        ticker (str): credit ticker mapping to corp_tx table
+        tickers (list): credit tickers mapping to corp_tx table
         T (int): financial time series length
         limit (int): max number of txs in dataset
         standardize (bool): data standardization indicator
@@ -30,13 +56,13 @@ class CreditDataset(Dataset):
             the context
         """
         # save state
-        self.ticker = ticker
+        self.tickers = tickers
         self.T = T
         self.release_window = T*90+10  # 90 day filing windows + 10 day buffer
         if txids is not None:
             self.txids = np.array(txids)
         else:
-            self.txids = get_corptx_ids(ticker,
+            self.txids = get_corptx_ids(tickers,
                                         release_window=self.release_window,
                                         release_count=T, limit=limit)
         self.exclude_cols = exclude_cols
@@ -59,6 +85,11 @@ class CreditDataset(Dataset):
         returns
         stats (CrediStats): mu and std for financials and context
         """
+        fin_cols = get_fin_cols(int(self.txids[0]),
+                                release_window=self.release_window,
+                                limit=self.T,
+                                exclude_cols=self.exclude_cols)
+
         # calculate mu
         total_fin, total_ctx = get_credit_data(
             id=int(self.txids[0]),
@@ -90,6 +121,13 @@ class CreditDataset(Dataset):
 
         fin_std = (total_fin/N)**0.5
         ctx_std = (total_ctx/N)**0.5
+
+        _, cols = (fin_std == 0).nonzero()
+
+        if len(cols) > 0:
+            zero_cols = fin_cols[np.unique(cols)]
+            print(f'fin std zero for following columns: {zero_cols}')
+
         stats = CreditStats((fin_mu, fin_std), (ctx_mu, ctx_std))
         return stats
 
