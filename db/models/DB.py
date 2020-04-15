@@ -9,7 +9,7 @@ db_pass = environ['PG_FLEISHCO_PASS']
 DB_URL = f'postgresql+psycopg2://fleishco:{db_pass}@localhost/fleishco'
 
 # create engine and bind to meta
-engine = create_engine(DB_URL, echo=False)
+engine = create_engine(DB_URL, echo=True)
 
 # create db session and base
 db = sessionmaker(bind=engine)()

@@ -22,6 +22,11 @@ from ml.models.utils import line_plot
 
 # constants
 MODEL_TYPES = ['rnn', 'lstm', 'transformer']
+TECH = [
+    'AAPL', 'MSFT', 'INTC', 'IBM', 'QCOM', 'ORCL', 'TXN', 'MU', 'AMZN', 'GOOG',
+    'NVDA', 'JNPR', 'ADI', 'ADBE', 'STX', 'AVT', 'ARW', 'KLAC', 'NTAP',
+    'VRSK', 'TECD', 'MRVL', 'KEYS'
+]
 
 
 def setup_logger(name, level='DEBUG', fmt=None):
@@ -69,7 +74,6 @@ def setup_dataloaders(tickers, release_window, T, limit=None, mbatch_size=50,
             dataset = CreditDataset(tickers,
                                     T=T,
                                     standardize=True,
-                                    exclude_cols=CreditDataset.EX_COLS_QCOM,
                                     txids=ticker_idxs)
             standard_stats = dataset.standard_stats
         else:
@@ -77,7 +81,6 @@ def setup_dataloaders(tickers, release_window, T, limit=None, mbatch_size=50,
             dataset = CreditDataset(tickers,
                                     T=T,
                                     standardize=True,
-                                    exclude_cols=CreditDataset.EX_COLS_QCOM,
                                     txids=ticker_idxs,
                                     standard_stats=standard_stats)
         datasets.append(dataset)
@@ -138,7 +141,6 @@ def train(model, loader, optimizer, loss_fn, device, logger_name,
 
 def evaluate(model, loader, loss_fn, device, logger_name,
              pin_memory=False):
-    logger = logging.getLogger(logger_name)
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
@@ -146,11 +148,7 @@ def evaluate(model, loader, loss_fn, device, logger_name,
             X_fin, X_ctx, y = [b.to(device, non_blocking=pin_memory)
                                for b in batch]
             y_pred = model(X_fin, X_ctx)
-            mu_y_pred = np.mean(y_pred.cpu().numpy())
-            mu_y = np.mean(y.cpu().numpy())
             _, mye = loss_fn(y_pred, y)
-            logger.info(f'y_pred mu {mu_y_pred:5.4f} '
-                        f'| y mu: {mu_y:5.4f} | mye: {mye:5.4f}')
             total_loss += mye
 
     return total_loss / len(loader)
@@ -244,11 +242,9 @@ def main():
     logger.info(f'device type: {device.type}')
 
     # dataloaders setup
-    # AAPL: 33792, 1024
-    # LTD: 11264, 1024
-    tickers = ['AAPL', 'QCOM']  # company symbols for corp_tx
-    max_data_size = 8192  # max number of records for all loaders
-    mbatch_size = 512  # minibatch size
+    tickers = TECH
+    mbatch_size = 1024
+    max_data_size = (190000 // mbatch_size)*mbatch_size
     num_workers = 12  # number of data loader workers
     pin_memory = True if device.type == 'cuda' else False
     T = 8  # financial periods to pull
@@ -260,21 +256,31 @@ def main():
                                           num_workers=num_workers,
                                           pin_memory=pin_memory)
     train_loader, val_loader, test_loader = loaders
-    for loader_type, loader in zip(['train', 'val', 'test'], loaders):
-        logger.info(f'{tickers} | loader type {loader_type} | '
+    train_stats = datasets[0].standard_stats
+
+    # check sample shapes of each dataset
+    for ds_type, ds in zip(['train', 'val', 'test'], datasets):
+        sample = next(iter(ds))
+        logger.info(f'{ds_type} size: {sample[0].size()} '
+                    f'{sample[1].size()} '
+                    f'{sample[2].size()}')
+
+    logger.info(f'tickers: {tickers}')
+    for lt, loader in zip(['train', 'val', 'test'], loaders):
+        logger.info(f'type {lt} | '
                     f'| batches {len(loader)} '
                     f'| minibatch size {mbatch_size} '
                     f'| total records {len(loader)*mbatch_size}')
-
-    train_dataset = datasets[0]
-    train_stats = train_dataset.standard_stats.ctx_stats
-    logger.info(f'{loader_type} | mu: {train_stats.target[0][0]} '
-                f'| std: {train_stats.target[1][0]}')
+        if lt == 'train':
+            s = train_stats.ctx_stats
+            logger.info(f' type {lt} | '
+                        f'| mu: {s.target[0]:5.2f} '
+                        f'| std: {s.target[1]:5.2f} ')
 
     # model setup
     # train_xshape, train_yshape = shapes[0]
     # D_in = train_xshape[2]  # number of input features
-    D_in = 24  # from model (6 equities; 23 AAPL)
+    D_in = train_stats.fin_stats.mu.shape[0]  # from model (23 AAPL)
     D_ctx = 14  # from model (only for corp_txs)
     D_out = 1  # from model
     # D_out = train_yshape[1]  # number of output features
@@ -301,9 +307,9 @@ def main():
 
     # optimizer setup
     optimize_type = 'adam'
-    lr = 0.0001  # learning rate
+    lr = 0.00001  # learning rate
     if optimize_type == 'adam':
-        wd = 0.1  # weight decay (L2 penalty)
+        wd = 0.0  # weight decay (L2 penalty)
         optimizer = torch.optim.Adam(model.parameters(), lr=lr,
                                      weight_decay=wd)
     elif optimize_type == 'sgd':
@@ -315,11 +321,12 @@ def main():
                                                     gamma)
 
     # train model
-    epochs = 15
+    epochs = 1
     best_model = None
     best_val_loss = float('inf')
-    train_loss_fn = MYELoss(standard_stats=train_stats)
-    eval_loss_fn = MYELoss(standard_stats=train_stats)
+    train_stats = datasets[0].standard_stats
+    train_loss_fn = MYELoss(standard_stats=train_stats.ctx_stats)
+    eval_loss_fn = MYELoss(standard_stats=train_stats.ctx_stats)
     L = np.zeros(epochs)
     for epoch in range(1, epochs+1):
         epoch_start_time = time.time()
@@ -355,20 +362,19 @@ def main():
 
     train_stats = datasets[0].standard_stats
     y_mu_train, y_std_train = train_stats.target
-    y_mu_train, y_std_train = y_mu_train[0], y_std_train[0]
-    # y_mu_train, y_std_train = ctx_stats[0][0, -1], ctx_stats[1][0, -1]
+
+    val_stats = datasets[1].get_stats()
+    y_mu_val, y_std_val = val_stats.target
 
     test_stats = datasets[2].get_stats()
     y_mu_test, y_std_test = test_stats.target
-    y_mu_test, y_std_test = y_mu_test[0], y_std_test[0]
 
     print('-'*89)
     logger.info(
         f'| End of training | test yield loss {test_loss:5.2f} '
-        f'| mean test yield {y_mu_test:5.2f} '
-        f'| std test yield {y_std_test:5.2f} '
-        f'| mean train yield {y_mu_train:5.2f} '
-        f'| std train yield {y_std_train:5.2f} '
+        f'| train mu {y_mu_train:5.2f} std {y_std_train:5.2f} '
+        f'| val mu {y_mu_val:5.2f} std {y_std_val:5.2f} '
+        f'| test mu {y_mu_test:5.2f} std {y_std_test:5.2f} '
     )
     print('-'*89)
 

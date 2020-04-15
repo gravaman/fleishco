@@ -16,29 +16,33 @@ class CreditDataset(Dataset):
         'assetimpairment', 'restructuring',
         'depreciationandamortizationexpense',
         'interestexpense', 'capitalassetsales',
-        'other_opex', 'other_addbacks', 'dividends'
+        'other_opex', 'dividends'
     ]
     EX_COLS_CHTR = [
         'sgaexpense', 'researchanddevelopment',
         'shortterminvestments', 'longterminvestments',
         'sharebasedcompensation', 'acquisitiondivestitures',
         'other_investments', 'assetimpairment',
-        'restructuring', 'capitalassetsales', 'other_addbacks',
+        'restructuring', 'capitalassetsales',
         'dividends'
     ]
     EX_COLS_MSFT = [
         'depreciationandamortizationexpense', 'interestexpense',
         'capitalassetsales', 'acquisitiondivestitures',
-        'other_opex', 'other_addbacks'
+        'other_opex'
     ]
     EX_COLS_IBM = [
         'depreciationandamortizationexpense', 'interestexpense',
         'capitalassetsales', 'acquisitiondivestitures',
-        'other_opex', 'other_addbacks', 'longterminvestments'
+        'other_opex', 'longterminvestments'
     ]
     EX_COLS_QCOM = [
         'depreciationandamortizationexpense', 'acquisitiondivestitures',
-        'other_addbacks', 'dividends', 'capitalassetsales'
+        'dividends', 'capitalassetsales'
+    ]
+    EX_COLS_RANDO = [
+        'depreciationandamortizationexpense', 'interestexpense',
+        'capitalassetsales', 'other_opex', 'dividends'
     ]
 
     def __init__(self, tickers, T=8, limit=None, standardize=False,
@@ -85,51 +89,29 @@ class CreditDataset(Dataset):
         returns
         stats (CrediStats): mu and std for financials and context
         """
+        # calculate mean and standard deviation
+        fin, ctx = get_credit_data(
+            ids=self.txids.tolist(),
+            release_window=self.release_window,
+            release_count=self.T,
+            limit=None,
+            exclude_cols=self.exclude_cols)
+        fin_mu, ctx_mu = fin.mean(axis=0), ctx.mean(axis=0)
+        fin_std, ctx_std = fin.std(axis=0), ctx.std(axis=0)
+
+        # check whether any columns have standard deviation of zero
         fin_cols = get_fin_cols(int(self.txids[0]),
                                 release_window=self.release_window,
+                                release_count=self.T,
                                 limit=self.T,
                                 exclude_cols=self.exclude_cols)
-
-        # calculate mu
-        total_fin, total_ctx = get_credit_data(
-            id=int(self.txids[0]),
-            release_window=self.release_window,
-            limit=self.T, exclude_cols=self.exclude_cols)
-        N = 0
-        for txid in self.txids[1:]:
-            fin, ctx = get_credit_data(
-                id=int(txid),
-                release_window=self.release_window,
-                limit=self.T, exclude_cols=self.exclude_cols)
-            total_fin = total_fin+fin
-            total_ctx = total_ctx+ctx
-            N += 1
-
-        fin_mu = total_fin/N
-        ctx_mu = total_ctx/N
-
-        # calculate std
-        total_fin = np.zeros_like(total_fin)
-        total_ctx = np.zeros_like(total_ctx)
-        for txid in self.txids:
-            fin, ctx = get_credit_data(
-                id=int(txid),
-                release_window=self.release_window,
-                limit=self.T, exclude_cols=self.exclude_cols)
-            total_fin += (fin-fin_mu)**2
-            total_ctx += (ctx-ctx_mu)**2
-
-        fin_std = (total_fin/N)**0.5
-        ctx_std = (total_ctx/N)**0.5
-
-        _, cols = (fin_std == 0).nonzero()
+        cols = (fin_std == 0).nonzero()
 
         if len(cols) > 0:
             zero_cols = fin_cols[np.unique(cols)]
             print(f'fin std zero for following columns: {zero_cols}')
 
-        stats = CreditStats((fin_mu, fin_std), (ctx_mu, ctx_std))
-        return stats
+        return CreditStats((fin_mu, fin_std), (ctx_mu, ctx_std))
 
     def __len__(self):
         """Returns dataset length"""
@@ -151,8 +133,9 @@ class CreditDataset(Dataset):
             idx = idx.tolist()
 
         # pull data from db
-        fin, ctx = get_credit_data(id=int(self.txids[idx]),
+        fin, ctx = get_credit_data(ids=[int(self.txids[idx])],
                                    release_window=self.release_window,
+                                   release_count=self.T,
                                    limit=self.T,
                                    exclude_cols=self.exclude_cols)
 
@@ -234,8 +217,6 @@ class Stats:
         std ((T, D_in) np): std across time serires and feats
         """
         # sanity check inputs
-        assert len(mu.shape) == 2, f'mu dims {len(mu.shape)} != 2'
-        assert len(std.shape) == 2, f'std dims {len(mu.shape)} != 2'
         assert not (std == 0).any(), f'std contains zero'
         self.mu = mu
         self.std = std
@@ -273,7 +254,7 @@ class Stats:
         mu ((T, 1) np arr): mean across time series
         std ((T, 1) np arr): std across time series
         """
-        return self.mu[:, -1], self.std[:, -1]
+        return self.mu[-1], self.std[-1]
 
     def standardize(self, data, is_target=False):
         """

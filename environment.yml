@@ -30,6 +30,7 @@ dependencies:
         - tensorboard
         - sqlalchemy
         - xlwings
+        - tabulate
         - pip:
                 - pprofile
                 - jsons

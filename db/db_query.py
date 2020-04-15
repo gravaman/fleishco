@@ -12,6 +12,11 @@ from db.models.InterestRate import InterestRate
 from db.models.DB import db
 
 
+NON_FIN_COLS = [
+    'id', 'ticker', 'entity_id', 'earnings_release_date',
+    'filing_date', 'period', 'period_start', 'period_end'
+]
+
 DROP_COLS = [
         'avgsharesoutstandingbasic', 'avgdilutedsharesoutstanding',
         'commonstockdividendspershare', 'operatingexpenses',
@@ -30,38 +35,53 @@ DROP_COLS = [
         'sharesoutstandingendofperiod', 'restrictedcashandinvestmentscurrent',
         'paymentsofdividendspreferredstock', 'paymentsofdividendscommonstock',
         'paymentsofdividendsnoncontrollinginterest', 'assetimpairment',
-        'restructuring'
+        'restructuring', 'ev'
     ]
 
 # residual columns
+mkt_cap = (EquityPx.adj_close *
+           Financial.sharesoutstandingendofperiod).label('mkt_cap')
+
+ev = (mkt_cap +
+      Financial.totaldebt -
+      Financial.cash -
+      Financial.shortterminvestments -
+      Financial.longterminvestments).label('ev')
+
 other_opex = (Financial.operatingexpenses -
               Financial.sgaexpense -
               Financial.researchanddevelopment -
               Financial.depreciationandamortizationexpense -
-              Financial.operatingexpenseexitems).label('other_opex')
+              Financial.operatingexpenseexitems
+              ).label('other_opex')
 
-other_investments = (Financial.totalinvestments -
-                     Financial.shortterminvestments -
-                     Financial.longterminvestments).label('other_investments')
+other_investments = func.coalesce(Financial.totalinvestments -
+                                  Financial.shortterminvestments -
+                                  Financial.longterminvestments, 0
+                                  ).label('other_investments')
 
 other_current_assets = (Financial.currentassets -
                         Financial.shortterminvestments -
-                        Financial.cash).label('other_current_assets')
+                        Financial.cash
+                        ).label('other_current_assets')
 
 other_lt_assets = (Financial.assets -
                    Financial.ppe -
                    Financial.longterminvestments -
-                   Financial.currentassets).label('other_lt_assets')
+                   Financial.currentassets
+                   ).label('other_lt_assets')
 
 other_opcf = (Financial.operatingcashflow -
               Financial.netincome -
               Financial.depreciationamortization -
               Financial.sharebasedcompensation -
-              Financial.assetimpairment).label('other_opcf')
+              Financial.assetimpairment
+              ).label('other_opcf')
 
 other_invcf = (Financial.investingcashflow -
                Financial.capex -
-               Financial.acquisitiondivestitures).label('other_invcf')
+               Financial.acquisitiondivestitures
+               ).label('other_invcf')
 
 dividends = (Financial.paymentsofdividendscommonstock +
              Financial.paymentsofdividendspreferredstock +
@@ -74,9 +94,11 @@ other_fincf = (Financial.financingcashflow -
                Financial.paymentsofdividendsnoncontrollinginterest
                ).label('other_fincf')
 
-other_cols = ['other_opex', 'other_investments', 'other_current_assets',
+OTHER_COLS = ['other_opex', 'other_investments', 'other_current_assets',
               'other_lt_assets', 'other_opcf', 'other_invcf', 'dividends',
-              'other_fincf']
+              'other_fincf', 'mkt_cap', 'ev']
+
+FIN_COLS = ['adj_close'] + Financial.__table__.columns.keys() + OTHER_COLS
 
 
 def build_dataset():
@@ -295,7 +317,8 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
     return x, y, outcols
 
 
-def get_corptx_ids(tickers, release_window, release_count, limit):
+def get_corptx_ids(tickers, release_window, release_count, limit,
+                   tick_limit):
     """
     Gets sample_count ids for ticker with at least release_count earnings
     within release_window.
@@ -313,48 +336,54 @@ def get_corptx_ids(tickers, release_window, release_count, limit):
     # subquery relevant corp_tx ids
     ctx_tick_stmt = db.query(CorpTx) \
         .filter(
-            CorpTx.company_symbol.in_(tickers)
-        ).subquery()
+            and_(
+                CorpTx.company_symbol.in_(tickers),
+                CorpTx.close_yld > 0
+            )) \
+        .subquery('ctx_sq')
 
     # subquery corp_txs for release_count financial releases during window
     days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
     fin_count = func.count(Financial.id).label('fin_count')
 
-    window_stmt = db.query(CorpTx.id, fin_count) \
-        .select_from(CorpTx) \
+    window_stmt = db.query(CorpTx.id) \
+        .distinct(CorpTx.cusip_id, CorpTx.trans_dt) \
         .join(ctx_tick_stmt, ctx_tick_stmt.c.id == CorpTx.id) \
         .join(Financial, Financial.ticker == CorpTx.company_symbol) \
         .filter(
             and_(
                 days_from_release <= release_window,
-                days_from_release > 0,
-                CorpTx.close_yld > 0
-            )
-        ).group_by(
-            CorpTx.id
-        ).having(
-            fin_count == release_count
-        ).subquery()
+                days_from_release > 0)) \
+        .group_by(CorpTx.id) \
+        .having(fin_count == release_count) \
+        .subquery('window_sq')
 
-    s = db.query(CorpTx.id) \
-        .select_from(CorpTx) \
+    # partition by row number
+    rn = func.row_number() \
+        .over(partition_by=CorpTx.company_symbol).label('rn')
+
+    sq = db.query(CorpTx.id, rn) \
         .join(window_stmt, CorpTx.id == window_stmt.c.id) \
-        .join(
-            EquityPx,
-            and_(CorpTx.company_symbol == EquityPx.ticker,
-                 CorpTx.trans_dt == EquityPx.date)) \
+        .join(EquityPx,
+              and_(CorpTx.company_symbol == EquityPx.ticker,
+                   CorpTx.trans_dt == EquityPx.date)) \
         .join(InterestRate, CorpTx.trans_dt == InterestRate.date) \
-        .join(Financial, CorpTx.company_symbol == Financial.ticker) \
+        .join(Financial, Financial.ticker == CorpTx.company_symbol) \
         .filter(
             and_(
                 days_from_release <= release_window,
-                days_from_release > 0)) \
-        .distinct(CorpTx.cusip_id, CorpTx.company_symbol, CorpTx.trans_dt) \
+                days_from_release > 0,
+            )).subquery('sq')
+
+    s = db.query(CorpTx.id) \
+        .distinct(CorpTx.id, CorpTx.trans_dt) \
+        .join(sq, sq.c.id == CorpTx.id) \
+        .filter(sq.c.rn <= tick_limit*release_count) \
         .order_by(CorpTx.trans_dt.asc()) \
         .limit(limit)
 
     ids = db.execute(s).fetchall()
-    return np.array(ids).flatten()
+    return np.unique(np.array(ids).flatten())
 
 
 def get_credit_data(ids, release_window, release_count, limit,
@@ -381,8 +410,11 @@ def get_credit_data(ids, release_window, release_count, limit,
     return dffin.values, dftx.values
 
 
-def get_fin_cols(id, release_window, limit, exclude_cols=[]):
-    financials = _get_financial_data(id, release_window, limit)
+def get_fin_cols(id, release_window, release_count, limit, exclude_cols=[]):
+    financials = _get_financial_data([id],
+                                     release_window,
+                                     release_count,
+                                     limit)
     dffin = _clean_financial_data(financials, exclude_cols=exclude_cols)
     return dffin.columns.values
 
@@ -400,55 +432,53 @@ def _get_financial_data(ids, release_window, release_count, limit):
     samples (list): queried samples
     """
     # subquery relevant corp_tx ids
-    ctx_id_stmt = db.query(CorpTx) \
+    ctx_tick_stmt = db.query(CorpTx.id) \
         .filter(
-            CorpTx.id.in_(ids)
-        ).subquery()
+            and_(
+                CorpTx.id.in_(ids),
+                CorpTx.close_yld > 0
+            )) \
+        .subquery().alias('ctx_sq')
 
     # subquery corp_txs for release_count financial releases during window
     days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
     fin_count = func.count(Financial.id).label('fin_count')
 
-    window_stmt = db.query(CorpTx.id, fin_count) \
+    window_stmt = db.query(CorpTx.id) \
+        .join(ctx_tick_stmt, ctx_tick_stmt.c.id == CorpTx.id) \
+        .join(Financial, Financial.ticker == CorpTx.company_symbol) \
+        .filter(
+            and_(
+                days_from_release <= release_window,
+                days_from_release > 0)) \
+        .group_by(CorpTx.id) \
+        .having(fin_count == release_count) \
+        .subquery().alias('window_sq')
+
+    # query financials with equity px and interest rate data
+    s = db.query(EquityPx.adj_close, Financial, other_opex,
+                 other_investments, other_current_assets, other_lt_assets,
+                 other_opcf, other_invcf, dividends, other_fincf,
+                 mkt_cap, ev) \
         .select_from(CorpTx) \
-        .join(ctx_id_stmt, ctx_id_stmt.c.id == CorpTx.id) \
+        .join(window_stmt, window_stmt.c.id == CorpTx.id) \
+        .join(EquityPx,
+              and_(CorpTx.company_symbol == EquityPx.ticker,
+                   CorpTx.trans_dt == EquityPx.date)) \
+        .join(InterestRate, CorpTx.trans_dt == InterestRate.date) \
         .join(Financial, Financial.ticker == CorpTx.company_symbol) \
         .filter(
             and_(
                 days_from_release <= release_window,
                 days_from_release > 0,
-                CorpTx.close_yld > 0
-            )
-        ).group_by(
-            CorpTx.id
-        ).having(
-            fin_count == release_count
-        ).subquery()
-
-    # query financials with equity px and interest rate data
-    s = db.query(EquityPx.adj_close, Financial, other_opex,
-                 other_investments, other_current_assets, other_lt_assets,
-                 other_opcf, other_invcf, dividends, other_fincf) \
-        .select_from(CorpTx) \
-        .join(window_stmt, CorpTx.id == window_stmt.c.id) \
-        .join(EquityPx,
-              and_(CorpTx.company_symbol == EquityPx.ticker,
-                   CorpTx.trans_dt == EquityPx.date)) \
-        .join(InterestRate, CorpTx.trans_dt == InterestRate.date) \
-        .join(Financial, CorpTx.company_symbol == Financial.ticker) \
-        .filter(
-            and_(
-                days_from_release <= release_window,
-                days_from_release > 0
             )) \
-        .distinct(CorpTx.cusip_id,
-                  CorpTx.trans_dt,
+        .distinct(CorpTx.cusip_id, CorpTx.trans_dt,
                   Financial.earnings_release_date) \
         .order_by(
             CorpTx.cusip_id,
             CorpTx.trans_dt.desc(),
-            Financial.earnings_release_date.desc()
-        ).limit(limit)
+            Financial.earnings_release_date.desc()) \
+        .limit(limit)
 
     return db.execute(s).fetchall()
 
@@ -532,37 +562,25 @@ def _clean_financial_data(samples, exclude_cols=[]):
     returns
     df (pd df): cleaned samples
     """
-    # convert to df
-    colnames = ['adj_close'] + Financial.__table__.columns.keys() + other_cols
-    df = pd.DataFrame(samples, columns=colnames)
+    # convert to df and drop non financial columns
+    df = pd.DataFrame(samples,
+                      columns=FIN_COLS).drop(labels=NON_FIN_COLS, axis=1)
 
-    # drop non-financial cols and fill nans with 0
-    non_fin_cols = [
-        'id', 'ticker', 'entity_id', 'earnings_release_date',
-        'filing_date', 'period', 'period_start', 'period_end'
-    ]
-    df = df.drop(labels=non_fin_cols, axis=1)
+    # set vals to float and fill na with 0
     df = pd.DataFrame(df.values,
                       columns=df.columns.values,
                       dtype=np.float64).fillna(0)
 
-    # residual investments
     # consolidate afs and sti
     df.shortterminvestments = np.where(
         df.availableforsalesecurities.eq(df.shortterminvestments),
         df.shortterminvestments,
         df.shortterminvestments + df.availableforsalesecurities)
 
-    # capitalization adjustments:
-    # [1] calculate mkt cap and ev
-    # [2] normalize each row by ev
-    df['mkt_cap'] = df.adj_close * df.sharesoutstandingendofperiod
-    ev = df.mkt_cap + df.totaldebt - df.cash \
-        - df.shortterminvestments - df.longterminvestments
-    df = df.div(ev, axis=0)
-
-    # drop unnecessary cols
-    return df.drop(labels=DROP_COLS+exclude_cols, axis=1)
+    # normalize each row by ev and drop unnecessary cols
+    df = df.div(df.ev, axis=0)
+    df = df.drop(labels=DROP_COLS+exclude_cols, axis=1)
+    return df
 
 
 def _clean_credit_samples(samples):
