@@ -60,7 +60,9 @@ def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
     # conditionally plot results
     if savedir is not None:
         tx_cnt_path = join(savedir, f'dataset_txcnts_{data_tag}.png')
-        stats_path = join(savedir, f'dataset_txstats_{data_tag}.png')
+        sector_stats_path = join(savedir,
+                                 f'dataset_txstats_sector_{data_tag}.png')
+        all_stats_path = join(savedir, f'dataset_txstats_all_{data_tag}.png')
 
     if should_plot or savedir is not None:
         _tx_cnt_plot(sector_cnts, sector_names, should_plot=should_plot,
@@ -71,10 +73,14 @@ def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
                        tmp_periods[-1])
         val_bounds = (tmp_periods[-val_periods-test_periods-1],
                       test_bounds[1])
-        _stats_plot(sector_stats+[df_total_stats],
-                    sector_names+['combined'],
+        _stats_plot(sector_stats,
+                    sector_names,
                     highlight_bounds=[val_bounds, test_bounds],
-                    should_plot=should_plot, savepath=stats_path)
+                    should_plot=should_plot, savepath=sector_stats_path)
+        _stats_plot([df_total_stats],
+                    ['combined'],
+                    highlight_bounds=[val_bounds, test_bounds],
+                    should_plot=should_plot, savepath=all_stats_path)
 
     # print results to console
     sector_names.append('combined')

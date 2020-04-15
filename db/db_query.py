@@ -338,7 +338,8 @@ def get_corptx_ids(tickers, release_window, release_count, limit,
         .filter(
             and_(
                 CorpTx.company_symbol.in_(tickers),
-                CorpTx.close_yld > 0
+                CorpTx.close_yld > 0,
+                CorpTx.close_yld <= 20.0
             )) \
         .subquery('ctx_sq')
 
