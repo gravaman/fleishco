@@ -29,15 +29,35 @@ def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
         sector_cnts.append(df_cnts)
         sector_stats.append(df_stats)
 
-    for name, cnts, stats in zip(sector_names, sector_cnts, sector_stats):
-        print('-'*89)
-        print(f'{name} Transaction Counts:\n')
-        print(cnts)
-        print()
-        print(f'{name} Transaction Stats:\n')
-        print(stats)
-        print('-'*89)
+    # calculate tx totals by sector and overall
+    df_cnt_totals = pd.DataFrame(0, index=sector_cnts[0].index,
+                                 columns=sector_names)
+    for name, df_cnt in zip(sector_names, sector_cnts):
+        df_cnt_totals[name] = df_cnt.sum(axis=1)
 
+    df_cnt_totals['total'] = df_cnt_totals.sum(axis=1)
+
+    # calculate overall statistics
+    df_total_stats = pd.DataFrame(0, index=df_cnt_totals.index,
+                                  columns=sector_stats[0].columns)
+    # combined mu
+    for name, df_stat in zip(sector_names, sector_stats):
+        df_total_stats.mu += df_stat.mu*df_cnt_totals[name]
+
+    df_total_stats.mu /= df_cnt_totals.total
+
+    # combined sigma
+    for name, df_stat in zip(sector_names, sector_stats):
+        df_total_stats.sigma += (
+            (((df_stat.sigma**2) *
+              df_cnt_totals[name])**0.5 +
+             df_stat.mu-df_total_stats.mu)**2 /
+            df_cnt_totals.total
+        )
+
+    df_total_stats.sigma = df_total_stats.sigma**0.5
+
+    # conditionally plot results
     if savedir is not None:
         tx_cnt_path = join(savedir, f'dataset_txcnts_{data_tag}.png')
         stats_path = join(savedir, f'dataset_txstats_{data_tag}.png')
@@ -51,9 +71,24 @@ def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
                        tmp_periods[-1])
         val_bounds = (tmp_periods[-val_periods-test_periods-1],
                       test_bounds[1])
-        _stats_plot(sector_stats, sector_names,
+        _stats_plot(sector_stats+[df_total_stats],
+                    sector_names+['combined'],
                     highlight_bounds=[val_bounds, test_bounds],
                     should_plot=should_plot, savepath=stats_path)
+
+    # print results to console
+    sector_names.append('combined')
+    sector_cnts.append(df_cnt_totals)
+    sector_stats.append(df_total_stats)
+
+    for name, cnts, stats in zip(sector_names, sector_cnts, sector_stats):
+        print('-'*89)
+        print(f'{name} Transaction Counts:\n')
+        print(cnts)
+        print()
+        print(f'{name} Transaction Stats:\n')
+        print(stats)
+        print('-'*89)
 
 
 def get_data_metrics(tickers, tick_limit, ed, periods, freq='Y',
@@ -153,7 +188,7 @@ def _stats_plot(sector_data, sector_names, highlight_bounds, should_plot=False,
 
     ax.legend(loc='upper left')
     ax.set_ylabel('Yield To Worst ($\mu \pm \sigma$)')  # noqa - latex
-    ax.set_title('Dataset Statistics')
+    ax.set_title('Target Statistics Over Sample Period')
 
     plt.tight_layout()
 
