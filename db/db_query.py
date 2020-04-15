@@ -389,6 +389,15 @@ def get_corptx_ids(tickers, release_window, release_count, limit,
     return np.unique(np.array(ids).flatten())
 
 
+def get_target_stats(ids):
+    """Returns mean, std (pop)"""
+    s = db.query(func.avg(CorpTx.close_yld),
+                 func.stddev_pop(CorpTx.close_yld)) \
+        .filter(CorpTx.id.in_(ids))
+
+    return db.execute(s).fetchall()[0]
+
+
 def counts_by_sym(ids):
     s = db.query(CorpTx.company_symbol, func.count(CorpTx.company_symbol)) \
         .filter(CorpTx.id.in_(ids)) \
