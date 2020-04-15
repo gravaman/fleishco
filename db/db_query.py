@@ -318,7 +318,7 @@ def build_feature_data(day_window=100, sample_count=5, standardize=True):
 
 
 def get_corptx_ids(tickers, release_window, release_count, limit,
-                   tick_limit):
+                   tick_limit, sd, ed):
     """
     Gets sample_count ids for ticker with at least release_count earnings
     within release_window.
@@ -360,7 +360,8 @@ def get_corptx_ids(tickers, release_window, release_count, limit,
 
     # partition by row number
     rn = func.row_number() \
-        .over(partition_by=CorpTx.company_symbol).label('rn')
+        .over(partition_by=CorpTx.company_symbol,
+              order_by=CorpTx.id).label('rn')
 
     sq = db.query(CorpTx.id, rn) \
         .join(window_stmt, CorpTx.id == window_stmt.c.id) \
@@ -373,6 +374,8 @@ def get_corptx_ids(tickers, release_window, release_count, limit,
             and_(
                 days_from_release <= release_window,
                 days_from_release > 0,
+                CorpTx.trans_dt <= ed,
+                CorpTx.trans_dt > sd
             )).subquery('sq')
 
     s = db.query(CorpTx.id) \
@@ -384,6 +387,15 @@ def get_corptx_ids(tickers, release_window, release_count, limit,
 
     ids = db.execute(s).fetchall()
     return np.unique(np.array(ids).flatten())
+
+
+def counts_by_sym(ids):
+    s = db.query(CorpTx.company_symbol, func.count(CorpTx.company_symbol)) \
+        .filter(CorpTx.id.in_(ids)) \
+        .group_by(CorpTx.company_symbol)
+
+    results = db.execute(s).fetchall()
+    return results
 
 
 def get_credit_data(ids, release_window, release_count, limit,

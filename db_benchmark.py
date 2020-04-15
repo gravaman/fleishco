@@ -1,6 +1,8 @@
 from datetime import datetime
 from tabulate import tabulate
+import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 from sqlalchemy import and_
 from sqlalchemy.sql import func
 from db.models.Corporate import Corporate  # noqa - needed for sqlalchemy table
@@ -11,7 +13,7 @@ from db.models.EquityPx import EquityPx  # noqa - needed for sqlalchemy table
 from db.models.InterestRate import InterestRate
 from db.models.DB import db
 from ml.models.CreditDataset import CreditDataset
-from db.db_query import get_corptx_ids, _get_financial_data
+from db.db_query import get_corptx_ids, counts_by_sym
 
 
 TECH = [
@@ -21,7 +23,7 @@ TECH = [
 ]
 
 
-def default_corptx_ids(tickers, release_window=730, release_count=8,
+def default_corptx_ids(tickers, release_window=720, release_count=8,
                        limit=100):
     """Queries corp_tx table for each individual id.
 
@@ -73,7 +75,7 @@ def default_corptx_ids(tickers, release_window=730, release_count=8,
     return np.unique(ids)
 
 
-def batch_corptx_ids(tickers, release_window=730, release_count=8,
+def batch_corptx_ids(tickers, release_window=720, release_count=8,
                      limit=100):
     """Batch queries corp_tx table for given ids.
 
@@ -136,46 +138,50 @@ def corp_tx_id_benchmark():
           f'| {len(batch_ids): 5.0f} ids')
 
 
-def aggregate_summary(tickers, release_window=730, T=8):
-    print(f'ticker list length: {len(tickers)}')
+def aggregate_summary(tickers, tick_limit, ed, periods, freq='Y',
+                      release_window=720, T=8):
+    # get ids by period
+    dts = pd.date_range(end=ed, periods=periods+1, freq=freq)
+    dts = dts.map(lambda x: x.strftime('%Y-%m-%d')).values
+    idx_data = {t: [] for t in tickers}
+    for sd, ed in zip(dts[:-1], dts[1:]):
+        per_idxs = get_corptx_ids(tickers,
+                                  release_window=release_window,
+                                  release_count=T,
+                                  limit=None,
+                                  tick_limit=tick_limit,
+                                  sd=sd, ed=ed)
 
-    # get id list
-    idxs = get_corptx_ids(tickers,
-                          release_window=release_window,
-                          release_count=T, limit=None
-                          )
-    print(f'id list length: {len(idxs)}')
+        # add count by ticker
+        sym_cnts = counts_by_sym(per_idxs.tolist())
+        for ticker, cnt in sym_cnts:
+            idx_data[ticker].append(cnt)
 
-    # get financials
-    fins = _get_financial_data(idxs.tolist(),
-                               release_window=release_window,
-                               release_count=T,
-                               limit=None)
-    print(f'fins list length: {len(fins)} vs expected of {len(idxs)*T}')
+        # check for zeros
+        ticks, _ = zip(*sym_cnts)
+        for ticker in tickers:
+            if ticker not in ticks:
+                idx_data[ticker].append(0)
 
-    total_txs = len(idxs)
-    total_dataset = CreditDataset(tickers,
-                                  T=T,
-                                  standardize=False)
-    print(f'dataset length: {len(total_dataset)}')
+    df = pd.DataFrame(idx_data, index=dts[1:])
+    print(df)
 
-    sample = next(iter(total_dataset))
-    xfin_sz, xctx_sz, y_sz = [t.size() for t in sample]
+    # stacked bar chart
+    width = 0.35
+    fig, ax = plt.subplots()
 
-    print('-'*89)
-    print(f'Aggregate Sample Summary')
-    print('-'*89)
+    base = np.zeros(len(dts[1:]))
+    for col in df.columns.values:
+        ax.bar(dts[1:], df[col].values, width, label=col,
+               bottom=base)
+        base += df[col].values
 
-    table = [
-        ['tickers', f'{len(tickers):,}'],
-        ['X_fin size', xfin_sz],
-        ['X_ctx size', xctx_sz],
-        ['Y size', y_sz]
-    ]
-    print(tabulate(table))
-    print('-'*89)
+    ax.set_ylabel('tx count')
+    ax.set_title('txs by ticker')
+    ax.legend()
 
-    return total_txs
+    plt.tight_layout()
+    plt.show()
 
 
 def ticker_summary(tickers, total_txs, T=8):
@@ -197,7 +203,7 @@ def ticker_summary(tickers, total_txs, T=8):
 
 
 def summarize_data(tickers):
-    release_window = 730
+    release_window = 720
     T = 8
     total_txs = aggregate_summary(tickers,
                                   release_window=release_window,
@@ -209,6 +215,10 @@ if __name__ == '__main__':
     print('-'*89)
     print('Data Summary Analysis')
     print('-'*89)
-    idxs = get_corptx_ids(TECH[:2], release_window=730, release_count=8,
-                          limit=11000, tick_limit=5000)
-    print(f'idxs length: {len(idxs)}')
+    aggregate_summary(TECH, tick_limit=10, ed='2019-12-31',
+                      periods=4)
+
+    # idxs = get_corptx_ids(TECH[:2], release_window=720, release_count=8,
+    #                       limit=11000, tick_limit=5000,
+    #                       sd='2018-12-31', ed='2019-12-31')
+    # print(f'idxs length: {len(idxs)}')
