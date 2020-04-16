@@ -2,6 +2,7 @@ from os.path import join
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 from db.db_query import (
     get_corptx_ids,
     counts_by_sym,
@@ -12,9 +13,27 @@ from db.db_query import (
 TECH = [
     'AAPL', 'MSFT', 'INTC', 'IBM', 'QCOM', 'ORCL', 'TXN', 'MU', 'AMZN', 'GOOG',
     'NVDA', 'JNPR', 'ADI', 'ADBE', 'STX', 'AVT', 'ARW', 'KLAC', 'A', 'NTAP',
-    'VRSK', 'TECD', 'MRVL', 'KEYS'
+    'VRSK', 'TECD', 'KEYS', 'CSCO', 'AMD', 'CRM'
 ]
-TEST_TECH = ['TECD', 'MRVL', 'KEYS']
+
+LEISURE = ['FUN', 'RCL', 'EPR']
+RETAIL = [
+    'KSS', 'COST', 'MAT', 'ORLY', 'DG', 'HD', 'BBY', 'GPS', 'RL',
+    'TIF', 'ROST', 'BBBY', 'HAS', 'DDS', 'WMT',
+    'KR', 'AZO', 'WHR', 'AAP'
+]
+RESTAURANTS = ['SBUX', 'MCD', 'DRI']
+CONSUMER = LEISURE + RETAIL + RESTAURANTS
+
+LODGING = ['H']
+HOMEBUILDERS = ['LEN', 'TOL', 'KBH', 'PHM', 'BZH', 'MDC']
+SHOPPING_CENTER_REITS = ['REG', 'KIM']
+DATA_CENTER_REITS = ['DLR', 'AMT']
+TRIPLE_NET_REITS = ['O', 'SRC']
+REAL_ESTATE = LODGING + HOMEBUILDERS + SHOPPING_CENTER_REITS + \
+    DATA_CENTER_REITS + TRIPLE_NET_REITS
+
+TEST_TECH = ['TECD', 'KEYS']
 TEST_RE = ['EPR', 'RCL']
 OUTPUT_DIR = 'output/data_metrics'
 
@@ -65,7 +84,10 @@ def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
         all_stats_path = join(savedir, f'dataset_txstats_all_{data_tag}.png')
 
     if should_plot or savedir is not None:
-        _tx_cnt_plot(sector_cnts, sector_names, should_plot=should_plot,
+        cnt_names = sector_names + ['Combined']
+        cnt_total = df_cnt_totals.loc[:, df_cnt_totals.columns != 'total']
+        data = sector_cnts + [cnt_total]
+        _tx_cnt_plot(data, cnt_names, should_plot=should_plot,
                      savepath=tx_cnt_path)
 
         tmp_periods = sector_stats[0].index.values
@@ -78,23 +100,44 @@ def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
                     highlight_bounds=[val_bounds, test_bounds],
                     should_plot=should_plot, savepath=sector_stats_path)
         _stats_plot([df_total_stats],
-                    ['combined'],
+                    ['Combined'],
                     highlight_bounds=[val_bounds, test_bounds],
                     should_plot=should_plot, savepath=all_stats_path)
 
     # print results to console
-    sector_names.append('combined')
+    sector_names.append('Combined')
     sector_cnts.append(df_cnt_totals)
     sector_stats.append(df_total_stats)
 
     for name, cnts, stats in zip(sector_names, sector_cnts, sector_stats):
+        # add row for total across all years
+        total = pd.DataFrame(cnts.sum(axis=0).values[None, :],
+                             index=['Total'], columns=cnts.columns.values)
+        cnts = pd.concat([cnts, total])
         print('-'*89)
         print(f'{name} Transaction Counts:\n')
         print(cnts)
         print()
+        if savedir is not None:
+            p = join(savedir, f'dataset_txcnts_{name.lower()}.csv')
+            cnts.to_csv(p)
+
+        print(f'{name} Transaction Pcts:\n')
+        if name != 'Combined':
+            print(cnts.div(cnts.sum(axis=1), axis=0))
+        else:
+            print(cnts.div(cnts.total, axis=0))
+        print()
+        if savedir is not None:
+            p = join(savedir, f'dataset_txpcts_{name.lower()}.csv')
+            cnts.to_csv(p)
+
         print(f'{name} Transaction Stats:\n')
         print(stats)
         print('-'*89)
+        if savedir is not None:
+            p = join(savedir, f'dataset_txstats_{name.lower()}.csv')
+            cnts.to_csv(p)
 
 
 def get_data_metrics(tickers, tick_limit, ed, periods, freq='Y',
@@ -132,32 +175,43 @@ def _tx_cnt_plot(sector_data, sector_names, should_plot=False,
                  savepath=None):
     fig, ax = plt.subplots()
 
+    # plot bars
     margin = 0.1
-    width = 1/len(sector_data)-margin
+    bars = len(sector_data)
+    width = (1-margin)/bars
     xcount = sector_data[0].shape[0]
     x = np.arange(xcount)
     for i, df in enumerate(sector_data):
-        base = np.zeros(sector_data[0].shape[0])
-        for col in df.columns.values:
-            ax.bar(x+i*width, df[col], align='edge', bottom=base, width=width)
-            base += df[col].values
+        ax.bar(x+i*width, df.sum(axis=1).values, align='edge',
+               width=width, alpha=0.4)
 
-    date_xlocs = np.linspace(0.5-margin, xcount*(1-margin)-margin, xcount)
+    # add dates to x-axis
+    date_xlocs = np.linspace(width*bars*0.5,
+                             xcount-1+width*bars*0.5,
+                             xcount)
+    plt.tick_params(axis='x', which='both', bottom=False, top=False)
     ax.set_xticks(date_xlocs)
     ax.set_xticklabels([])
 
     y_min, y_max = ax.get_ylim()
-    date_yloc = y_min-(y_max-y_min)*0.15
-    for xloc, label in zip(date_xlocs, sector_data[0].index.values):
-        ax.text(xloc, date_yloc, label, ha='center')
+    date_yloc = y_min-(y_max-y_min)*0.175
+    date_labels = [f'FYE {d[:4]}' for d in sector_data[0].index.values]
+    for xloc, label in zip(date_xlocs, date_labels):
+        ax.text(xloc, date_yloc, label, ha='center', fontsize='x-small')
 
+    # add sector labels to x-axis
     base_xlocs = np.linspace(width*0.5, xcount-1+width*0.5, xcount)
-    sector_yloc = y_min-(y_max-y_min)*0.05
+    sector_yloc = y_min-(y_max-y_min)*0.01
     sector_labels = zip(*[sector_names for _ in range(xcount)])
     for i, labels in enumerate(sector_labels):
         sector_xlocs = base_xlocs+i*width
         for xloc, label in zip(sector_xlocs, labels):
-            ax.text(xloc, sector_yloc, label, ha='center')
+            ax.text(xloc, sector_yloc, label, ha='right',
+                    va='top', rotation=45, fontsize='xx-small')
+
+    # format y axis numbers
+    fmt = '{x:,.0f}'
+    ax.yaxis.set_major_formatter(mtick.StrMethodFormatter(fmt))
 
     ax.set_ylabel('Transaction Count')
     ax.set_title('Transactions By Issuer')
@@ -174,14 +228,21 @@ def _stats_plot(sector_data, sector_names, highlight_bounds, should_plot=False,
                 savepath=None):
     fig, ax = plt.subplots()
 
+    date_labels = [f'FYE {d[:4]}' for d in sector_data[0].index.values]
     for df, name in zip(sector_data, sector_names):
-        ax.plot(df.index.values, df['mu'].values, label=name)
-        ax.fill_between(df.index, df['mu']-df['sigma'],
+        ax.plot(date_labels, df['mu'].values, label=name)
+        ax.fill_between(date_labels, df['mu']-df['sigma'],
                         df['mu']+df['sigma'], alpha=0.2)
 
+    date_map = {dt: lbl for dt, lbl in
+                zip(sector_data[0].index.values, date_labels)}
     val_bounds, test_bounds = highlight_bounds
+    val_bounds = [date_map[bound] for bound in val_bounds]
+    test_bounds = [date_map[bound] for bound in test_bounds]
     ax.axvspan(*val_bounds, alpha=0.1, color='y')
     ax.axvspan(*test_bounds, alpha=0.1, color='g')
+
+    ax.tick_params(axis='x', labelsize='x-small')
 
     y_min, y_max = ax.get_ylim()
     y_loc = y_min+(y_max-y_min)/10
@@ -205,11 +266,17 @@ def _stats_plot(sector_data, sector_names, highlight_bounds, should_plot=False,
 
 
 def main():
-    sector_tickers = [TEST_TECH, TEST_RE]
-    sector_names = ['Tech', 'RE']
-    summarize_data(sector_tickers, sector_names, tick_limit=10,
-                   ed='2019-12-31', periods=[2, 1, 1], should_plot=True,
-                   savedir=OUTPUT_DIR, data_tag='test')
+    # sector_tickers = [TEST_TECH, TEST_RE]
+    # sector_names = ['Tech', 'Real Estate']
+    # periods = [2, 1, 1]
+    # tick_limit = 10
+    sector_tickers = [TECH, CONSUMER, REAL_ESTATE]
+    sector_names = ['Tech', 'Consumer', 'Real Estate']
+    periods = [6, 1, 1]
+    tick_limit = 1000
+    summarize_data(sector_tickers, sector_names, tick_limit=tick_limit,
+                   ed='2019-12-31', periods=periods, should_plot=True,
+                   savedir=OUTPUT_DIR, data_tag='tech_consumer_re')
 
 
 if __name__ == '__main__':
