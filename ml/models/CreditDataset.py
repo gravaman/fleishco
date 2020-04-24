@@ -1,52 +1,22 @@
+from os.path import join
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from db.db_query import (
     get_corptx_ids,
-    get_credit_data,
-    get_fin_cols
+    get_fwd_credit_tx_ids,
+    get_fwd_credit_data
 )
 
 
 class CreditDataset(Dataset):
     """Credit Specific Dataset"""
+    OUTPUT_DIR = 'output/dataset_stats'
 
-    # based on AAPL sample data (update as needed)
-    EX_COLS_AAPL = [
-        'assetimpairment', 'restructuring',
-        'depreciationandamortizationexpense',
-        'interestexpense', 'capitalassetsales',
-        'other_opex', 'dividends'
-    ]
-    EX_COLS_CHTR = [
-        'sgaexpense', 'researchanddevelopment',
-        'shortterminvestments', 'longterminvestments',
-        'sharebasedcompensation', 'acquisitiondivestitures',
-        'other_investments', 'assetimpairment',
-        'restructuring', 'capitalassetsales',
-        'dividends'
-    ]
-    EX_COLS_MSFT = [
-        'depreciationandamortizationexpense', 'interestexpense',
-        'capitalassetsales', 'acquisitiondivestitures',
-        'other_opex'
-    ]
-    EX_COLS_IBM = [
-        'depreciationandamortizationexpense', 'interestexpense',
-        'capitalassetsales', 'acquisitiondivestitures',
-        'other_opex', 'longterminvestments'
-    ]
-    EX_COLS_QCOM = [
-        'depreciationandamortizationexpense', 'acquisitiondivestitures',
-        'dividends', 'capitalassetsales'
-    ]
-    EX_COLS_RANDO = [
-        'depreciationandamortizationexpense', 'interestexpense',
-        'capitalassetsales', 'other_opex', 'dividends'
-    ]
-
-    def __init__(self, tickers, T=8, limit=None, standardize=False,
-                 exclude_cols=[], txids=None, standard_stats=None):
+    def __init__(self, tickers, split_type, T=8, limit=None, standardize=False,
+                 txids=None, standard_stats=None,
+                 should_load=False, should_save=False, days_lower=30,
+                 days_upper=60):
         """
         Initializes credit dataset
 
@@ -62,54 +32,78 @@ class CreditDataset(Dataset):
         # save state
         self.tickers = tickers
         self.T = T
-        self.release_window = T*90+10  # 90 day filing windows + 10 day buffer
+        self.release_window = 720
+        self.days_lower = days_lower
+        self.days_upper = days_upper
+        self.split_type = split_type
         if txids is not None:
             self.txids = np.array(txids)
         else:
-            self.txids = get_corptx_ids(tickers,
-                                        release_window=self.release_window,
-                                        release_count=T, limit=limit)
-        self.exclude_cols = exclude_cols
+            txids = get_corptx_ids(tickers,
+                                   release_window=self.release_window,
+                                   release_count=T, limit=limit)
+            txids = get_fwd_credit_tx_ids(txids, days_lower, days_upper)
+            self.txids = np.array(txids)
 
         # conditionally set standardization stats and indicator
         self.standardize = standardize
         if standardize and standard_stats is None:
             # get stats for standardization if not provided
-            self.standard_stats = self.get_stats()
+            self.standard_stats = self.get_stats(should_load=should_load,
+                                                 should_save=should_save)
         elif standard_stats is not None:
             # store standardization stats (not necessarily going to use)
             self.standard_stats = standard_stats
         else:
             self.standard_stats = None
 
-    def get_stats(self):
+    def get_stats(self, should_load=False, should_save=False):
         """
         Calculates mean and standard deviation for dataset.
 
         returns
         stats (CrediStats): mu and std for financials and context
         """
-        # calculate mean and standard deviation
-        fin, ctx = get_credit_data(
-            ids=self.txids.tolist(),
-            release_window=self.release_window,
-            release_count=self.T,
-            limit=None,
-            exclude_cols=self.exclude_cols)
-        fin_mu, ctx_mu = fin.mean(axis=0), ctx.mean(axis=0)
-        fin_std, ctx_std = fin.std(axis=0), ctx.std(axis=0)
+        # load from drive
+        if should_load:
+            print(f'loading {self.split_type} stats from drive')
+            fin_mu = np.loadtxt(
+                open(join(self.OUTPUT_DIR, self.split_type, 'fin_mu.csv'),
+                     'rb'), delimiter=',')
+            fin_std = np.loadtxt(
+                open(join(self.OUTPUT_DIR, self.split_type, 'fin_std.csv'),
+                     'rb'), delimiter=',')
+            ctx_mu = np.loadtxt(
+                open(join(self.OUTPUT_DIR, self.split_type, 'ctx_mu.csv'),
+                     'rb'), delimiter=',')
+            ctx_std = np.loadtxt(
+                open(join(self.OUTPUT_DIR, self.split_type, 'ctx_std.csv'),
+                     'rb'), delimiter=',')
+        else:
+            # calculate mean and standard deviation
+            print(f'calculating {self.split_type} stats for '
+                  f'{len(self.txids)} ids')
+            fin, ctx = get_fwd_credit_data(
+                ids=self.txids.tolist(),
+                release_window=self.release_window,
+                release_count=self.T,
+                limit=None,
+                days_lower=self.days_lower,
+                days_upper=self.days_upper)
+            fin_mu, ctx_mu = fin.mean(axis=0), ctx.mean(axis=0)
+            fin_std, ctx_std = fin.std(axis=0), ctx.std(axis=0)
 
-        # check whether any columns have standard deviation of zero
-        fin_cols = get_fin_cols(int(self.txids[0]),
-                                release_window=self.release_window,
-                                release_count=self.T,
-                                limit=self.T,
-                                exclude_cols=self.exclude_cols)
-        cols = (fin_std == 0).nonzero()
-
-        if len(cols) > 0:
-            zero_cols = fin_cols[np.unique(cols)]
-            print(f'fin std zero for following columns: {zero_cols}')
+        if should_save:
+            # save to drive
+            print(f'saving {self.split_type} stats to drive')
+            np.savetxt(join(self.OUTPUT_DIR, self.split_type, 'fin_mu.csv'),
+                       fin_mu, delimiter=',')
+            np.savetxt(join(self.OUTPUT_DIR, self.split_type, 'fin_std.csv'),
+                       fin_std, delimiter=',')
+            np.savetxt(join(self.OUTPUT_DIR, self.split_type, 'ctx_mu.csv'),
+                       ctx_mu, delimiter=',')
+            np.savetxt(join(self.OUTPUT_DIR, self.split_type, 'ctx_std.csv'),
+                       ctx_std, delimiter=',')
 
         return CreditStats((fin_mu, fin_std), (ctx_mu, ctx_std))
 
@@ -133,11 +127,12 @@ class CreditDataset(Dataset):
             idx = idx.tolist()
 
         # pull data from db
-        fin, ctx = get_credit_data(ids=[int(self.txids[idx])],
-                                   release_window=self.release_window,
-                                   release_count=self.T,
-                                   limit=self.T,
-                                   exclude_cols=self.exclude_cols)
+        fin, ctx = get_fwd_credit_data(ids=[int(self.txids[idx])],
+                                       release_window=self.release_window,
+                                       release_count=self.T,
+                                       limit=self.T,
+                                       days_lower=self.days_lower,
+                                       days_upper=self.days_upper)
 
         # conditionally standardize
         if self.standardize:

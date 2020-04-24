@@ -6,7 +6,10 @@ import matplotlib.ticker as mtick
 from db.db_query import (
     get_corptx_ids,
     counts_by_sym,
-    get_target_stats
+    get_credit_targets,
+    get_target_stats,
+    _get_ltv_data,
+    get_fwd_credit_tx_ids
 )
 
 
@@ -41,12 +44,20 @@ OUTPUT_DIR = 'output/data_metrics'
 def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
                    should_plot=False, savedir=None, data_tag='untitled'):
     train_periods, val_periods, test_periods = periods
-    sector_cnts, sector_stats = [], []
+    sector_cnts, sector_stats, sector_targets = [], [], []
     for tickers in sector_tickers:
-        df_cnts, df_stats = get_data_metrics(tickers, tick_limit,
-                                             ed=ed, periods=sum(periods))
+        df_cnts, df_stats, targets = get_data_metrics(
+            tickers, tick_limit, ed=ed, periods=sum(periods))
+
+        # consolidate targets over sample periods
+        targets = [
+               np.concatenate(targets[:periods[0]]),
+               np.concatenate(targets[periods[0]:periods[0]+periods[1]]),
+               np.concatenate(targets[periods[0]+periods[1]:])
+              ]
         sector_cnts.append(df_cnts)
         sector_stats.append(df_stats)
+        sector_targets.append(targets)
 
     # calculate tx totals by sector and overall
     df_cnt_totals = pd.DataFrame(0, index=sector_cnts[0].index,
@@ -82,6 +93,7 @@ def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
         sector_stats_path = join(savedir,
                                  f'dataset_txstats_sector_{data_tag}.png')
         all_stats_path = join(savedir, f'dataset_txstats_all_{data_tag}.png')
+        hist_path = join(savedir, f'dataset_tgt_hist_{data_tag}.png')
 
     if should_plot or savedir is not None:
         cnt_names = sector_names + ['Combined']
@@ -103,6 +115,24 @@ def summarize_data(sector_tickers, sector_names, tick_limit, ed, periods=[],
                     ['Combined'],
                     highlight_bounds=[val_bounds, test_bounds],
                     should_plot=should_plot, savepath=all_stats_path)
+
+        # combine samples for each sampling period
+        sector_targets = [t+[np.concatenate(t)] for t in sector_targets]
+        # for tgts, tag, p in zip(sector_targets, sample_tags, hist_paths):
+        #     _target_histogram(tgts, sector_names+['Combined'],
+        #                       sample_tag=tag,
+        #                       should_plot=should_plot,
+        #                       savepath=p)
+
+        # combine sampling periods to get overall dataset
+        hist_title_prefs = ['Training (2012-2017)',
+                            'Validation (2018)',
+                            'Testing (2019)',
+                            'Combined (2012-2019)']
+        combo = [np.array(t).flatten() for t in list(zip(*sector_targets))]
+        _target_histogram(combo, hist_title_prefs, sample_tag='Dataset',
+                          sector_names=sector_names+['Combined'],
+                          should_plot=should_plot, savepath=hist_path)
 
     # print results to console
     sector_names.append('Combined')
@@ -152,6 +182,7 @@ def get_data_metrics(tickers, tick_limit, ed, periods, freq='Y',
                           columns=tickers, index=eds)
     df_stat = pd.DataFrame(np.zeros((periods, 2), dtype=np.float),
                            columns=['mu', 'sigma'], index=eds)
+    targets = []
     for sd, ed in zip(sds, eds):
         # get ids for given period
         period_ids = get_corptx_ids(tickers,
@@ -160,6 +191,9 @@ def get_data_metrics(tickers, tick_limit, ed, periods, freq='Y',
                                     limit=None,
                                     tick_limit=tick_limit,
                                     sd=sd, ed=ed).tolist()
+        # get close_yld for ids
+        targets.append(get_credit_targets(period_ids))
+
         # count ids by ticker
         ticker_counts = counts_by_sym(period_ids)
         for ticker, cnt in ticker_counts:
@@ -168,7 +202,7 @@ def get_data_metrics(tickers, tick_limit, ed, periods, freq='Y',
         # get target stats for ids
         df_stat.loc[ed] = get_target_stats(period_ids)
 
-    return df_cnt, df_stat
+    return df_cnt, df_stat, targets
 
 
 def _tx_cnt_plot(sector_data, sector_names, should_plot=False,
@@ -218,10 +252,11 @@ def _tx_cnt_plot(sector_data, sector_names, should_plot=False,
 
     plt.tight_layout()
 
-    if should_plot:
-        plt.show()
     if savepath is not None:
         plt.savefig(savepath)
+        print(f'plot saved to {savepath}')
+    if should_plot:
+        plt.show()
 
 
 def _stats_plot(sector_data, sector_names, highlight_bounds, should_plot=False,
@@ -259,17 +294,44 @@ def _stats_plot(sector_data, sector_names, highlight_bounds, should_plot=False,
 
     plt.tight_layout()
 
-    if should_plot:
-        plt.show()
     if savepath is not None:
         plt.savefig(savepath)
+        print(f'stats plot saved to {savepath}')
+    if should_plot:
+        plt.show()
+
+
+def _target_histogram(targets, names, sample_tag, sector_names,
+                      should_plot=False, savepath=None):
+    fig, axs = plt.subplots(2, 2, constrained_layout=True)
+
+    fig.suptitle(f'{sample_tag} Target Yield To Worst Distribution')
+    for i, (label, x, ax) in enumerate(zip(names, targets, axs.flatten())):
+        ax.hist(x, bins=100, density=True, label=sector_names)
+        ax.yaxis.set_major_formatter(mtick.PercentFormatter(xmax=1))
+        ax.title.set_text(label)
+        if i == 3:
+            ax.legend(loc='upper left', ncol=1, framealpha=0.5,
+                      bbox_to_anchor=(1, 1.5))
+
+    if savepath is not None:
+        plt.savefig(savepath)
+        print(f'{sample_tag} histogram saved to {savepath}')
+    if should_plot:
+        plt.show()
+
+
+def test_main():
+    sector_tickers = [TEST_TECH, TEST_RE]
+    sector_names = ['Tech', 'Real Estate']
+    periods = [2, 1, 1]
+    tick_limit = 10
+    summarize_data(sector_tickers, sector_names, tick_limit=tick_limit,
+                   ed='2019-12-31', periods=periods, should_plot=True,
+                   savedir=OUTPUT_DIR, data_tag='tech_consumer_re')
 
 
 def main():
-    # sector_tickers = [TEST_TECH, TEST_RE]
-    # sector_names = ['Tech', 'Real Estate']
-    # periods = [2, 1, 1]
-    # tick_limit = 10
     sector_tickers = [TECH, CONSUMER, REAL_ESTATE]
     sector_names = ['Tech', 'Consumer', 'Real Estate']
     periods = [6, 1, 1]
@@ -280,4 +342,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    ids = [2947, 2948, 2949]
+    ltvs = _get_ltv_data(ids=ids, release_window=730, release_count=8)
+    print(ltvs)
+
+    id_pairs = get_fwd_credit_tx_ids(ids, 2)
+    print(id_pairs)

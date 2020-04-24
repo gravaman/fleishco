@@ -6,7 +6,7 @@ class LSTM(nn.Module):
     """
     Basic LSTM model.
     """
-    def __init__(self, D_in, H, D_out, L=1, dropout=0.0, device=None):
+    def __init__(self, D_in, H, D_ctx, D_out, L=1, dropout=0.0, device=None):
         """
         params
         D_in: input feature count
@@ -26,9 +26,11 @@ class LSTM(nn.Module):
 
         self.lstm = nn.LSTM(input_size=self.D_in, hidden_size=self.H,
                             num_layers=self.L, dropout=self.dropout)
-        self.fcout = nn.Linear(self.H, self.D_out)
+        self.ctx_layer = nn.Linear(self.H+D_ctx, 2*(self.H+D_ctx))
+        self.relu = nn.ReLU()
+        self.fcout = nn.Linear(2*(self.H+D_ctx), self.D_out)
 
-    def forward(self, X):
+    def forward(self, X_fin, X_ctx):
         """
         params
         X (batch_size, T, D_in): input minibatch
@@ -38,19 +40,23 @@ class LSTM(nn.Module):
         """
         # initialize hidden state and cell
         # lstm expects input shape (T, batch_size, D_in)
-        X = X.permute(1, 0, 2)
-        T, batch_size, D_in = X.size()
-        hidden = X.new_zeros((self.L, batch_size, self.H),
-                             dtype=torch.float,
-                             device=self.device)
+        X_fin = X_fin.permute(1, 0, 2)
+        T, batch_size, D_in = X_fin.size()
+        hidden = X_fin.new_zeros((self.L, batch_size, self.H),
+                                 dtype=torch.float,
+                                 device=self.device)
         cell = hidden.clone()
 
         # ffwd each time step
         for t in range(T):
             self.lstm.flatten_parameters()
-            x = X[t].unsqueeze(0)
+            x = X_fin[t].unsqueeze(0)
             _, (hidden, cell) = self.lstm(x, (hidden, cell))
 
         # ffwd fc output layer
-        y_pred = self.fcout(hidden.squeeze(0))
-        return y_pred
+        X_out = torch.cat((hidden.squeeze(0), X_ctx.reshape(batch_size, -1)),
+                          dim=1)
+        X_out = self.ctx_layer(X_out)
+        X_out = self.relu(X_out)
+        X_out = self.fcout(X_out)
+        return X_out

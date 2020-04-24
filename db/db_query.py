@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from sqlalchemy import and_
 from sqlalchemy.sql import func
+from sqlalchemy.orm import aliased
 from db.models.Corporate import Corporate  # noqa - needed for sqlalchemy table
 from db.models.Entity import Entity  # noqa - needed for sqlalchemy table
 from db.models.CorpTx import CorpTx  # noqa - needed for sqlalchemy table
@@ -61,26 +62,22 @@ other_investments = func.coalesce(Financial.totalinvestments -
                                   ).label('other_investments')
 
 other_current_assets = (Financial.currentassets -
-                        Financial.shortterminvestments -
                         Financial.cash
                         ).label('other_current_assets')
 
 other_lt_assets = (Financial.assets -
                    Financial.ppe -
-                   Financial.longterminvestments -
                    Financial.currentassets
                    ).label('other_lt_assets')
 
 other_opcf = (Financial.operatingcashflow -
               Financial.netincome -
               Financial.depreciationamortization -
-              Financial.sharebasedcompensation -
-              Financial.assetimpairment
+              Financial.sharebasedcompensation
               ).label('other_opcf')
 
 other_invcf = (Financial.investingcashflow -
-               Financial.capex -
-               Financial.acquisitiondivestitures
+               Financial.capex
                ).label('other_invcf')
 
 dividends = (Financial.paymentsofdividendscommonstock +
@@ -89,16 +86,53 @@ dividends = (Financial.paymentsofdividendscommonstock +
              ).label('dividends')
 
 other_fincf = (Financial.financingcashflow -
-               Financial.paymentsofdividendscommonstock -
-               Financial.paymentsofdividendspreferredstock -
-               Financial.paymentsofdividendsnoncontrollinginterest
+               Financial.paymentsforrepurchaseofcommonstock
                ).label('other_fincf')
 
 OTHER_COLS = ['other_opex', 'other_investments', 'other_current_assets',
               'other_lt_assets', 'other_opcf', 'other_invcf', 'dividends',
               'other_fincf', 'mkt_cap', 'ev']
 
-FIN_COLS = ['adj_close'] + Financial.__table__.columns.keys() + OTHER_COLS
+FIN_COLS = [
+    Financial.revenueadjusted, Financial.grossprofit,
+    Financial.sgaexpense, Financial.interestexpense,
+    Financial.incometaxes, Financial.currentliabilities, Financial.ppe,
+    Financial.totaldebt, Financial.depreciationamortization,
+    Financial.sharebasedcompensation, Financial.capexgross,
+    Financial.paymentsforrepurchaseofcommonstock,
+    other_current_assets, other_lt_assets, other_opcf,
+    other_invcf, Financial.financingcashflow, mkt_cap, ev
+]
+FIN_QUERY_COL_NAMES = [c.key for c in FIN_COLS]
+FIN_COL_NAMES = [c.key for c in FIN_COLS if c.key != 'ev']
+
+days_to_mtrty = (CorpTx.mtrty_dt-CorpTx.trans_dt).label('days_to_mtrty')
+days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
+fin_count = func.count(Financial.id).label('fin_count')
+CTX_COLS = [
+    InterestRate.BAMLC0A1CAAASYTW,
+    InterestRate.BAMLH0A3HYCSYTW,
+    InterestRate.BAMLC1A0C13YSYTW,
+    InterestRate.BAMLC2A0C35YSYTW,
+    days_to_mtrty,
+    CorpTx.close_yld,
+]
+CTX_COL_NAMES = [c.key for c in CTX_COLS]
+
+ctx1 = aliased(CorpTx, name='ctx1')
+ctx2 = aliased(CorpTx, name='ctx2')
+days_fwd = (ctx2.trans_dt-ctx1.trans_dt).label('days_fwd')
+fwd_days_to_mtrty = (ctx2.mtrty_dt-ctx2.trans_dt).label('days_to_mtrty')
+FWD_CTX_COLS = [
+    InterestRate.BAMLC0A1CAAASYTW,
+    InterestRate.BAMLH0A3HYCSYTW,
+    InterestRate.BAMLC1A0C13YSYTW,
+    InterestRate.BAMLC2A0C35YSYTW,
+    fwd_days_to_mtrty,
+    ctx2.close_yld,
+]
+FWD_CTX_COL_NAMES = CTX_COL_NAMES + ['fwd_close_yld']
+CTX_TFORM = ['close_yld', 'fwd_close_yld']
 
 
 def build_dataset():
@@ -332,12 +366,71 @@ def get_corptx_ids(tickers, release_window, release_count, limit,
     returns
     ids (1D np arr): matching ids
     """
+    # subquery corp_txs for release_count financial releases during window
+    days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
+    fin_count = func.count(Financial.id).label('fin_count')
+
+    window_stmt = db.query(CorpTx.id) \
+        .distinct(CorpTx.cusip_id, CorpTx.trans_dt) \
+        .join(Financial, Financial.ticker == CorpTx.company_symbol) \
+        .filter(CorpTx.company_symbol.in_(tickers),
+                CorpTx.close_yld > 0,
+                CorpTx.close_yld <= 20.0,
+                days_from_release <= release_window,
+                days_from_release > 0) \
+        .group_by(CorpTx.id) \
+        .having(fin_count == release_count) \
+        .subquery('window_sq')
+
+    # partition by row number
+    rn = func.row_number() \
+        .over(partition_by=CorpTx.company_symbol,
+              order_by=CorpTx.id).label('rn')
+
+    sq = db.query(CorpTx.id, rn) \
+        .join(window_stmt, CorpTx.id == window_stmt.c.id) \
+        .join(EquityPx,
+              and_(CorpTx.company_symbol == EquityPx.ticker,
+                   CorpTx.trans_dt == EquityPx.date)) \
+        .join(InterestRate, CorpTx.trans_dt == InterestRate.date) \
+        .join(Financial, Financial.ticker == CorpTx.company_symbol) \
+        .filter(days_from_release <= release_window,
+                days_from_release > 0,
+                CorpTx.trans_dt <= ed,
+                CorpTx.trans_dt > sd).subquery('sq')
+
+    s = db.query(CorpTx.id) \
+        .distinct(CorpTx.id, CorpTx.trans_dt) \
+        .join(sq, sq.c.id == CorpTx.id) \
+        .filter(sq.c.rn <= tick_limit*release_count) \
+        .order_by(CorpTx.trans_dt.asc()) \
+        .limit(limit)
+
+    ids = db.execute(s).fetchall()
+    return np.unique(np.array(ids).flatten())
+
+
+def get_corptx_ids_by_cusip(cusip, release_window, release_count, limit,
+                            sd, ed):
+    """
+    Gets sample_count ids for cusip with at least release_count earnings
+    within release_window.
+
+    params
+    cusip (str): corp_tx cusip
+    release_window (int): relevant earnings_release_date window
+    release_count (int): min number of earnings releases during release_window
+    limit (int): samples return limit
+
+    returns
+    ids (1D np arr): matching ids
+    """
 
     # subquery relevant corp_tx ids
     ctx_tick_stmt = db.query(CorpTx) \
         .filter(
             and_(
-                CorpTx.company_symbol.in_(tickers),
+                CorpTx.cusip_id == cusip,
                 CorpTx.close_yld > 0,
                 CorpTx.close_yld <= 20.0
             )) \
@@ -359,12 +452,7 @@ def get_corptx_ids(tickers, release_window, release_count, limit,
         .having(fin_count == release_count) \
         .subquery('window_sq')
 
-    # partition by row number
-    rn = func.row_number() \
-        .over(partition_by=CorpTx.company_symbol,
-              order_by=CorpTx.id).label('rn')
-
-    sq = db.query(CorpTx.id, rn) \
+    sq = db.query(CorpTx.id) \
         .join(window_stmt, CorpTx.id == window_stmt.c.id) \
         .join(EquityPx,
               and_(CorpTx.company_symbol == EquityPx.ticker,
@@ -382,7 +470,6 @@ def get_corptx_ids(tickers, release_window, release_count, limit,
     s = db.query(CorpTx.id) \
         .distinct(CorpTx.id, CorpTx.trans_dt) \
         .join(sq, sq.c.id == CorpTx.id) \
-        .filter(sq.c.rn <= tick_limit*release_count) \
         .order_by(CorpTx.trans_dt.asc()) \
         .limit(limit)
 
@@ -408,8 +495,7 @@ def counts_by_sym(ids):
     return results
 
 
-def get_credit_data(ids, release_window, release_count, limit,
-                    exclude_cols=[]):
+def get_credit_data(ids, release_window, release_count, limit):
     """
     Gets dataset consisting of interest rate, financial,
     credit terms, and yield data by transaction. Financial data
@@ -425,20 +511,38 @@ def get_credit_data(ids, release_window, release_count, limit,
     tx (nd array): cleaned corp tx and interest rate data
     """
     financials = _get_financial_data(ids, release_window, release_count, limit)
-    dffin = _clean_financial_data(financials, exclude_cols=exclude_cols)
+    dffin = pd.DataFrame(financials)
+    if len(dffin.columns) == 0:
+        print(f'empty dffin for ids: {ids}')
+    dffin = dffin.div(dffin.iloc[:, -1], axis=0)
+    dffin = dffin.drop(dffin.columns[-1], axis=1)
 
     credit_txs = _get_credit_tx_data(ids)
     dftx = _clean_credit_tx_data(credit_txs)
     return dffin.values, dftx.values
 
 
-def get_fin_cols(id, release_window, release_count, limit, exclude_cols=[]):
-    financials = _get_financial_data([id],
-                                     release_window,
-                                     release_count,
-                                     limit)
-    dffin = _clean_financial_data(financials, exclude_cols=exclude_cols)
-    return dffin.columns.values
+def get_fwd_credit_data(ids, release_window, release_count, limit,
+                        days_lower, days_upper):
+    # get financials
+    financials = _get_financial_data(ids, release_window, release_count, limit)
+    dffin = pd.DataFrame(financials, columns=FIN_QUERY_COL_NAMES)
+    dffin = dffin.div(dffin.iloc[:, -1], axis=0)
+    dffin = dffin.drop(labels='ev', axis=1)
+
+    # get current ctx
+    credit_txs = _get_credit_tx_data(ids)
+    dftx = _clean_credit_tx_data(credit_txs).reset_index(drop=True)
+
+    # get fwd ctx
+    fwd_credit_txs = _get_fwd_credit_tx_data(ids, days_lower, days_upper)
+    dffwdtx = _clean_credit_tx_data(fwd_credit_txs).reset_index(drop=True)
+
+    # combine ctxs and log transform
+    dftx['days_to_mtrty'] = dffwdtx['days_to_mtrty']
+    dftx['fwd_close_yld'] = dffwdtx['close_yld']
+    dftx[CTX_TFORM] = np.log(dftx[CTX_TFORM])
+    return dffin.values, dftx.values
 
 
 def _get_financial_data(ids, release_window, release_count, limit):
@@ -453,35 +557,18 @@ def _get_financial_data(ids, release_window, release_count, limit):
     returns
     samples (list): queried samples
     """
-    # subquery relevant corp_tx ids
-    ctx_tick_stmt = db.query(CorpTx.id) \
-        .filter(
-            and_(
-                CorpTx.id.in_(ids),
-                CorpTx.close_yld > 0
-            )) \
-        .subquery().alias('ctx_sq')
-
     # subquery corp_txs for release_count financial releases during window
-    days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
-    fin_count = func.count(Financial.id).label('fin_count')
-
     window_stmt = db.query(CorpTx.id) \
-        .join(ctx_tick_stmt, ctx_tick_stmt.c.id == CorpTx.id) \
         .join(Financial, Financial.ticker == CorpTx.company_symbol) \
-        .filter(
-            and_(
-                days_from_release <= release_window,
-                days_from_release > 0)) \
+        .filter(CorpTx.id.in_(ids),
+                days_from_release > 0,
+                days_from_release <= release_window) \
         .group_by(CorpTx.id) \
         .having(fin_count == release_count) \
         .subquery().alias('window_sq')
 
     # query financials with equity px and interest rate data
-    s = db.query(EquityPx.adj_close, Financial, other_opex,
-                 other_investments, other_current_assets, other_lt_assets,
-                 other_opcf, other_invcf, dividends, other_fincf,
-                 mkt_cap, ev) \
+    s = db.query(*FIN_COLS) \
         .select_from(CorpTx) \
         .join(window_stmt, window_stmt.c.id == CorpTx.id) \
         .join(EquityPx,
@@ -489,11 +576,8 @@ def _get_financial_data(ids, release_window, release_count, limit):
                    CorpTx.trans_dt == EquityPx.date)) \
         .join(InterestRate, CorpTx.trans_dt == InterestRate.date) \
         .join(Financial, Financial.ticker == CorpTx.company_symbol) \
-        .filter(
-            and_(
-                days_from_release <= release_window,
-                days_from_release > 0,
-            )) \
+        .filter(days_from_release > 0,
+                days_from_release <= release_window) \
         .distinct(CorpTx.cusip_id, CorpTx.trans_dt,
                   Financial.earnings_release_date) \
         .order_by(
@@ -501,6 +585,41 @@ def _get_financial_data(ids, release_window, release_count, limit):
             CorpTx.trans_dt.desc(),
             Financial.earnings_release_date.desc()) \
         .limit(limit)
+
+    return db.execute(s).fetchall()
+
+
+def _get_ltv_data(ids, release_window, release_count):
+    # subquery corp_txs for release_count financial releases during window
+    days_from_release = CorpTx.trans_dt-Financial.earnings_release_date
+    fin_count = func.count(Financial.id).label('fin_count')
+
+    window_stmt = db.query(CorpTx.id) \
+        .join(Financial, Financial.ticker == CorpTx.company_symbol) \
+        .filter(CorpTx.id.in_(ids),
+                days_from_release > 0,
+                days_from_release <= release_window) \
+        .group_by(CorpTx.id) \
+        .having(fin_count == release_count) \
+        .subquery().alias('window_sq')
+
+    # query financials with equity px and interest rate data
+    ltv = (Financial.totaldebt/ev).label('ltv')
+    s = db.query(ltv) \
+        .select_from(CorpTx) \
+        .join(window_stmt, window_stmt.c.id == CorpTx.id) \
+        .join(EquityPx,
+              and_(CorpTx.company_symbol == EquityPx.ticker,
+                   CorpTx.trans_dt == EquityPx.date)) \
+        .join(InterestRate, CorpTx.trans_dt == InterestRate.date) \
+        .join(Financial, Financial.ticker == CorpTx.company_symbol) \
+        .filter(days_from_release > 0,
+                days_from_release <= release_window) \
+        .distinct(CorpTx.cusip_id, CorpTx.trans_dt) \
+        .order_by(
+            CorpTx.cusip_id,
+            CorpTx.trans_dt.desc(),
+            Financial.earnings_release_date.desc()) \
 
     return db.execute(s).fetchall()
 
@@ -515,26 +634,52 @@ def _get_credit_tx_data(ids):
     returns
     samples (list): queried samples
     """
-    days_to_mtrty = (CorpTx.mtrty_dt-CorpTx.trans_dt).label('days_to_mtrty')
-    s = db.query(days_to_mtrty, CorpTx.close_yld,
-                 InterestRate.BAMLC0A1CAAASYTW,
-                 InterestRate.BAMLC0A2CAASYTW,
-                 InterestRate.BAMLC0A3CASYTW,
-                 InterestRate.BAMLC0A4CBBBSYTW,
-                 InterestRate.BAMLH0A1HYBBSYTW,
-                 InterestRate.BAMLH0A2HYBSYTW,
-                 InterestRate.BAMLH0A3HYCSYTW,
-                 InterestRate.BAMLC1A0C13YSYTW,
-                 InterestRate.BAMLC2A0C35YSYTW,
-                 InterestRate.BAMLC3A0C57YSYTW,
-                 InterestRate.BAMLC4A0C710YSYTW,
-                 InterestRate.BAMLC7A0C1015YSYTW,
-                 InterestRate.BAMLC8A0C15PYSYTW) \
+    s = db.query(*CTX_COLS) \
         .select_from(CorpTx) \
         .filter(CorpTx.id.in_(ids)) \
         .join(InterestRate, CorpTx.trans_dt == InterestRate.date)
 
     return db.execute(s).fetchall()
+
+
+def get_fwd_credit_tx_ids(base_ids, days_lower, days_upper):
+    s = db.query(ctx1.id, ctx2.id) \
+        .select_from(ctx1) \
+        .join(ctx2, ctx1.cusip_id == ctx2.cusip_id) \
+        .join(InterestRate, ctx1.trans_dt == InterestRate.date) \
+        .filter(ctx1.id.in_(base_ids),
+                ctx1.close_yld > 0,
+                ctx1.close_yld <= 20,
+                ctx2.close_yld > 0,
+                days_fwd > days_lower,
+                days_fwd <= days_upper) \
+        .distinct(ctx1.id) \
+        .order_by(ctx1.id, ctx2.trans_dt.asc())
+
+    id_pairs = db.execute(s).fetchall()
+    return np.array(id_pairs)
+
+
+def _get_fwd_credit_tx_data(ids, days_lower, days_upper):
+    s = db.query(*FWD_CTX_COLS) \
+        .select_from(ctx1) \
+        .join(ctx2, ctx1.company_symbol == ctx2.company_symbol) \
+        .join(InterestRate, ctx2.trans_dt == InterestRate.date) \
+        .filter(ctx1.id.in_(ids),
+                ctx2.close_yld > 0,
+                days_fwd > days_lower,
+                days_fwd <= days_upper) \
+        .distinct(ctx1.id) \
+        .order_by(ctx1.id, ctx2.trans_dt.asc())
+
+    return db.execute(s).fetchall()
+
+
+def get_credit_targets(ids):
+    s = db.query(CorpTx.close_yld) \
+        .filter(CorpTx.id.in_(ids))
+    ylds = db.execute(s).fetchall()
+    return np.array(ylds).flatten()
 
 
 def _clean_credit_tx_data(samples):
@@ -548,30 +693,12 @@ def _clean_credit_tx_data(samples):
     df (pd df): cleaned samples with last col target close_yld
     """
     # convert to df
-    corp_tx_cols = ['days_to_mtrty', 'close_yld']
-    rate_cols = [c for c in InterestRate.__table__.columns.keys()
-                 if c not in ['id', 'date']]
-    incols = corp_tx_cols + rate_cols
-    df = pd.DataFrame(samples, columns=incols)
+    df = pd.DataFrame(samples, columns=CTX_COL_NAMES)
 
-    # reduce complexity of rating based interest rate cols
-    df.loc[:, 'BAMLH0A3HYCSYTW'] -= df.BAMLH0A2HYBSYTW
-    df.loc[:, 'BAMLH0A2HYBSYTW'] -= df.BAMLH0A1HYBBSYTW
-    df.loc[:, 'BAMLH0A1HYBBSYTW'] -= df.BAMLC0A4CBBBSYTW
-    df.loc[:, 'BAMLC0A4CBBBSYTW'] -= df.BAMLC0A3CASYTW
-    df.loc[:, 'BAMLC0A3CASYTW'] -= df.BAMLC0A2CAASYTW
-    df.loc[:, 'BAMLC0A2CAASYTW'] -= df.BAMLC0A1CAAASYTW
-
-    # reduce complexity of duration based interest rate cols
-    df.loc[:, 'BAMLC8A0C15PYSYTW'] -= df.BAMLC7A0C1015YSYTW
-    df.loc[:, 'BAMLC7A0C1015YSYTW'] -= df.BAMLC4A0C710YSYTW
-    df.loc[:, 'BAMLC4A0C710YSYTW'] -= df.BAMLC3A0C57YSYTW
-    df.loc[:, 'BAMLC3A0C57YSYTW'] -= df.BAMLC2A0C35YSYTW
+    # reduce complexity of interest rate cols
+    df.loc[:, 'BAMLH0A3HYCSYTW'] -= df.BAMLC0A1CAAASYTW
     df.loc[:, 'BAMLC2A0C35YSYTW'] -= df.BAMLC1A0C13YSYTW
-
-    # order cols interest rates, instrument metrics
-    out_cols = rate_cols + ['days_to_mtrty', 'close_yld']
-    return df[out_cols]
+    return df
 
 
 def _clean_financial_data(samples, exclude_cols=[]):
@@ -639,17 +766,10 @@ def _clean_credit_samples(samples):
                       dtype=np.float64).fillna(0)
 
     # reduce complexity of rating based interest rate cols
-    df.loc[:, 'BAMLH0A3HYCSYTW'] -= df.BAMLH0A2HYBSYTW
-    df.loc[:, 'BAMLH0A2HYBSYTW'] -= df.BAMLH0A1HYBBSYTW
-    df.loc[:, 'BAMLH0A1HYBBSYTW'] -= df.BAMLC0A4CBBBSYTW
-    df.loc[:, 'BAMLC0A4CBBBSYTW'] -= df.BAMLC0A3CASYTW
-    df.loc[:, 'BAMLC0A3CASYTW'] -= df.BAMLC0A2CAASYTW
-    df.loc[:, 'BAMLC0A2CAASYTW'] -= df.BAMLC0A1CAAASYTW
+    df.loc[:, 'BAMLH0A3HYCSYTW'] -= df.BAMLC0A4CBBBSYTW
+    df.loc[:, 'BAMLC0A4CBBBSYTW'] -= df.BAMLC0A1CAAASYTW
 
     # reduce complexity of duration based interest rate cols
-    df.loc[:, 'BAMLC8A0C15PYSYTW'] -= df.BAMLC7A0C1015YSYTW
-    df.loc[:, 'BAMLC7A0C1015YSYTW'] -= df.BAMLC4A0C710YSYTW
-    df.loc[:, 'BAMLC4A0C710YSYTW'] -= df.BAMLC3A0C57YSYTW
     df.loc[:, 'BAMLC3A0C57YSYTW'] -= df.BAMLC2A0C35YSYTW
     df.loc[:, 'BAMLC2A0C35YSYTW'] -= df.BAMLC1A0C13YSYTW
 

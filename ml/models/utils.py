@@ -33,7 +33,23 @@ def pos_encodings(T, P, D_embed):
     return encodings
 
 
-def line_plot(x, Y, labels=None, title=None, should_show=True, savepath=None):
+def pos_encodings_attn(T, D_embed):
+    """Positional encoding based on attention is all you need paper"""
+    positions = torch.arange(T, dtype=torch.float32).unsqueeze(1)
+    encodings = torch.zeros((T, D_embed))
+    encodings[:, 0::2] = torch.sin(
+        positions/torch.pow(1000, torch.arange(0,
+                                               D_embed, 2,
+                                               dtype=torch.float32)/D_embed))
+    encodings[:, 1::2] = torch.cos(
+        positions/torch.pow(1000, torch.arange(1,
+                                               D_embed, 2,
+                                               dtype=torch.float32)/D_embed))
+    return encodings
+
+
+def line_plot(x, Y, labels=None, title=None, should_show=True, savepath=None,
+              xlabel=None, ylabel=None):
     """
     Generates line plot for given series.
 
@@ -58,9 +74,16 @@ def line_plot(x, Y, labels=None, title=None, should_show=True, savepath=None):
     if title:
         ax.set_title(title)
 
+    if xlabel:
+        ax.set_xlabel(xlabel)
+
+    if ylabel:
+        ax.set_ylabel(ylabel)
+
     plt.tight_layout()
-    if should_show:
-        plt.show()
 
     if savepath is not None:
         plt.savefig(savepath)
+
+    if should_show:
+        plt.show()

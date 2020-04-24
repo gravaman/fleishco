@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from ml.models.Encoder import Encoder
 from ml.models.Decoder import Decoder
-from ml.models.utils import pos_encodings
+from ml.models.utils import pos_encodings_attn
 
 
 class Transformer(nn.Module):
@@ -57,7 +57,7 @@ class Transformer(nn.Module):
         """
         # positionally encode and embed input
         batch_size, T, _ = X_fin.size()
-        PE = pos_encodings(T, self.P, self.D_embed).to(self.device)
+        PE = pos_encodings_attn(T, self.D_embed).to(self.device)
 
         X_fin = self.embedding_layer(X_fin)
         X_fin = X_fin.add_(PE)
